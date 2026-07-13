@@ -26,7 +26,7 @@ BuildRequires:  (nettle-devel or libnettle-devel)
 BuildRequires:  gmp-devel
 BuildRequires:  wget
 BuildRequires:  file
-BuildRequires:  perl
+BuildRequires:  perl-interpreter
 
 %if 0%{?suse_version}
 BuildRequires:  webkit2gtk3-devel
@@ -34,9 +34,12 @@ BuildRequires:  webkit2gtk3-devel
 BuildRequires:  webkit2gtk4.1-devel
 %endif
 
-BuildRequires:  (librsvg2-devel or librsvg-devel)
 BuildRequires:  gtk4-devel
-BuildRequires:  gtk4-layer-shell-devel
+
+# gtk4-layer-shell is not packaged for EL10; it is expected from a source
+# build into /usr/local (https://github.com/wmww/gtk4-layer-shell). Both the
+# BuildRequires and the automatic library dependency are therefore omitted.
+%global __requires_exclude ^libgtk4-layer-shell\\.so.*$
 
 Conflicts:      globalprotect-openconnect-snapshot
 
@@ -51,6 +54,9 @@ A GUI for GlobalProtect VPN, based on OpenConnect, supports the SSO authenticati
 %build
 # The injected RUSTFLAGS could fail the build
 unset RUSTFLAGS
+# RPM overrides PKG_CONFIG_PATH with the system dirs only; re-add /usr/local
+# so the source-built gtk4-layer-shell is found (not packaged for EL10).
+export PKG_CONFIG_PATH=%{_libdir}/pkgconfig:/usr/share/pkgconfig:/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig
 # gpgui-helper (the proprietary-GUI downloader) is replaced by gpwidget,
 # which is installed as the gpgui symlink and owned by this package.
 make build BUILD_GUI_HELPER=0
