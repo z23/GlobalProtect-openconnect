@@ -169,6 +169,7 @@ install:
 		fi; \
 		install -Dm644 apps/gpwidget/assets/waybar/gpwidget-module.jsonc $(DESTDIR)/usr/share/gpwidget/examples/waybar/gpwidget-module.jsonc; \
 		install -Dm644 apps/gpwidget/assets/waybar/style.css $(DESTDIR)/usr/share/gpwidget/examples/waybar/style.css; \
+		install -Dm644 apps/gpwidget/assets/systemd/gpwidget-stack.service $(DESTDIR)/usr/share/gpwidget/examples/systemd/gpwidget-stack.service; \
 		install -Dm644 packaging/dms/GlobalProtectVPN/plugin.json $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/plugin.json; \
 		install -Dm644 packaging/dms/GlobalProtectVPN/GlobalProtectVPN.qml $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/GlobalProtectVPN.qml; \
 		install -Dm644 packaging/dms/GlobalProtectVPN/GlobalProtectSettings.qml $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/GlobalProtectSettings.qml; \

@@ -41,6 +41,36 @@ make build            # includes gpwidget (BUILD_WIDGET=1 default)
 sudo make install     # installs /usr/bin/gpwidget + gpgui symlink + assets
 ```
 
+### RPM (EL10 / Fedora-family)
+
+```sh
+sudo dnf install -y rpm-build rpmdevtools \
+    gcc-c++ cargo make libtool autoconf automake gettext pkg-config \
+    openssl-devel libxml2-devel zlib-devel lz4-devel gnutls-devel \
+    p11-kit-devel nettle-devel gmp-devel \
+    webkit2gtk4.1-devel gtk4-devel gtk4-layer-shell-devel librsvg2-devel
+git submodule update --init --recursive   # bundled openconnect sources
+make rpm                                  # output in .build/rpm/
+sudo dnf install -y .build/rpm/globalprotect-openconnect-*.$(uname -m).rpm
+```
+
+Remove any stray manual installs first (`ls /usr/local/bin/gp*`) — binaries
+in /usr/local/bin shadow the packaged ones on most PATHs.
+
+## Autostart (optional)
+
+Start the stack at login so the widget shows live status immediately (the
+VPN is not dialed unless `auto-connect = true`):
+
+- **niri**: `spawn-at-startup "gpclient" "launch-gui"` in
+  `~/.config/niri/config.kdl`, or
+- **systemd user unit**: copy
+  `/usr/share/gpwidget/examples/systemd/gpwidget-stack.service` to
+  `~/.config/systemd/user/` and `systemctl --user enable --now gpwidget-stack`.
+
+Without autostart everything still works — the first click on the widget
+brings the stack up on demand.
+
 ## Configuration — `~/.config/gpwidget/config.toml`
 
 ```toml
