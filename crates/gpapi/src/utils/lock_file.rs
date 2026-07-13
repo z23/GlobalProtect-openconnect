@@ -21,6 +21,15 @@ impl LockFile {
   pub fn lock(&self, content: &str) -> anyhow::Result<()> {
     let content = format!("{}:{}", self.pid, content);
     std::fs::write(&self.path, content)?;
+
+    // The GUI, running as the desktop user, discovers the port from this
+    // file; a restrictive umask on the launch chain must not hide it.
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o644))?;
+    }
+
     Ok(())
   }
 

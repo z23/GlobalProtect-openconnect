@@ -40,8 +40,24 @@ pub fn spawn(api_key: Vec<u8>) -> WsClient {
   }
 }
 
+const STARTUP_GRACE_SECS: u64 = 15;
+
 async fn run(api_key: Vec<u8>, notice_tx: mpsc::Sender<WsNotice>, mut req_rx: mpsc::Receiver<WsRequest>) {
   let crypto = Crypto::new(api_key);
+
+  // gpservice launches this daemon concurrently with binding its WS server,
+  // so the lock file may not exist (or be complete) yet — wait for it
+  // instead of declaring the service gone at birth.
+  let deadline = tokio::time::Instant::now() + Duration::from_secs(STARTUP_GRACE_SECS);
+  while !service_alive().await {
+    if tokio::time::Instant::now() >= deadline {
+      warn!("gpservice did not come up within {}s", STARTUP_GRACE_SECS);
+      let _ = notice_tx.send(WsNotice::Gone).await;
+      return;
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+  }
 
   loop {
     match pump(&crypto, &notice_tx, &mut req_rx).await {
