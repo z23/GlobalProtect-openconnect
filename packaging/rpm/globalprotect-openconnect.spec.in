@@ -34,10 +34,10 @@ BuildRequires:  webkit2gtk3-devel
 BuildRequires:  webkit2gtk4.1-devel
 %endif
 
-BuildRequires:  (libappindicator-gtk3-devel or libappindicator3-1)
 BuildRequires:  (librsvg2-devel or librsvg-devel)
+BuildRequires:  gtk4-devel
+BuildRequires:  gtk4-layer-shell-devel
 
-Requires:       (libappindicator-gtk3 or libayatana-appindicator)
 Conflicts:      globalprotect-openconnect-snapshot
 
 %global debug_package %{nil}
@@ -48,16 +48,15 @@ A GUI for GlobalProtect VPN, based on OpenConnect, supports the SSO authenticati
 %prep
 %setup
 
-%postun
-rm -f %{_bindir}/gpgui
-
 %build
 # The injected RUSTFLAGS could fail the build
 unset RUSTFLAGS
-make build
+# gpgui-helper (the proprietary-GUI downloader) is replaced by gpwidget,
+# which is installed as the gpgui symlink and owned by this package.
+make build BUILD_GUI_HELPER=0
 
 %install
-%make_install
+%make_install BUILD_GUI_HELPER=0
 
 %files
 %defattr(-,root,root)
@@ -70,6 +69,7 @@ make build
 %{_datadir}/icons/hicolor/256x256@2/apps/gpgui.png
 %{_datadir}/icons/hicolor/scalable/apps/gpgui.svg
 %{_datadir}/polkit-1/actions/com.yuezk.gpgui.policy
+%{_datadir}/gpwidget/
 
 %dir /usr/lib/NetworkManager
 %dir /usr/lib/NetworkManager/dispatcher.d

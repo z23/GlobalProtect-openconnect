@@ -46,6 +46,14 @@ impl ConnectInfo {
   pub fn gateway(&self) -> &Gateway {
     &self.gateway
   }
+
+  pub fn portal(&self) -> &str {
+    &self.portal
+  }
+
+  pub fn gateways(&self) -> &[Gateway] {
+    &self.gateways
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

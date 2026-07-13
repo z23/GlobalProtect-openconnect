@@ -1,0 +1,38 @@
+window.gp-popup {
+  border-radius: 12px;
+}
+
+.state-label {
+  font-weight: bold;
+}
+
+.state-dot {
+  font-size: 14px;
+}
+
+.state-dot.stack-down,
+.state-dot.disconnected {
+  color: #6c7086;
+}
+
+.state-dot.needs-setup {
+  color: #89b4fa;
+}
+
+.state-dot.connecting,
+.state-dot.disconnecting {
+  color: #f9e2af;
+}
+
+.state-dot.connected {
+  color: #a6e3a1;
+}
+
+.state-dot.error {
+  color: #f38ba8;
+}
+
+.error-label {
+  color: #f38ba8;
+  font-size: 12px;
+}

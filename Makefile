@@ -31,6 +31,9 @@ PUBLISH ?= 0
 # Indicates whether to build the GUI components
 BUILD_GUI_HELPER ?= 1
 
+# Indicates whether to build the open-source bar-widget GUI (gpwidget)
+BUILD_WIDGET ?= 1
+
 # Indicates whether to build embedded webview auth support into gpauth
 BUILD_WEBVIEW_AUTH ?= 1
 PREFIX ?= /usr/local
@@ -130,6 +133,11 @@ build-rs:
 		$(CARGO) build $(CARGO_BUILD_ARGS) -p gpgui-helper; \
 	fi
 
+	# Build the bar-widget GUI if BUILD_WIDGET is set to 1
+	if [ $(BUILD_WIDGET) -eq 1 ]; then \
+		$(CARGO) build $(CARGO_BUILD_ARGS) -p gpwidget; \
+	fi
+
 clean:
 	$(CARGO) clean
 	rm -rf .build
@@ -150,6 +158,22 @@ install:
 
 	if [ -f .build/gpgui/gpgui_*/gpgui ]; then \
 		install -Dm755 .build/gpgui/gpgui_*/gpgui $(DESTDIR)/usr/bin/gpgui; \
+	fi
+
+	# Install gpwidget; unless the proprietary gpgui was installed above,
+	# also provide the gpgui name so gpservice launches gpwidget as the GUI.
+	if [ $(BUILD_WIDGET) -eq 1 ]; then \
+		install -Dm755 target/release/gpwidget $(DESTDIR)/usr/bin/gpwidget; \
+		if [ ! -e $(DESTDIR)/usr/bin/gpgui ]; then \
+			ln -snf gpwidget $(DESTDIR)/usr/bin/gpgui; \
+		fi; \
+		install -Dm644 apps/gpwidget/assets/waybar/gpwidget-module.jsonc $(DESTDIR)/usr/share/gpwidget/examples/waybar/gpwidget-module.jsonc; \
+		install -Dm644 apps/gpwidget/assets/waybar/style.css $(DESTDIR)/usr/share/gpwidget/examples/waybar/style.css; \
+		install -Dm644 packaging/dms/GlobalProtectVPN/plugin.json $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/plugin.json; \
+		install -Dm644 packaging/dms/GlobalProtectVPN/GlobalProtectVPN.qml $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/GlobalProtectVPN.qml; \
+		install -Dm644 packaging/dms/GlobalProtectVPN/GlobalProtectSettings.qml $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/GlobalProtectSettings.qml; \
+		install -Dm644 packaging/dms/GlobalProtectVPN/Formatting.js $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/Formatting.js; \
+		install -Dm644 packaging/dms/GlobalProtectVPN/README.md $(DESTDIR)/usr/share/gpwidget/dms/GlobalProtectVPN/README.md; \
 	fi
 
 	install -Dm755 packaging/files/usr/libexec/gpclient/vpnc-script $(DESTDIR)/usr/libexec/gpclient/vpnc-script
@@ -266,6 +290,8 @@ uninstall:
 	rm -f $(DESTDIR)/usr/bin/gpservice
 	rm -f $(DESTDIR)/usr/bin/gpgui-helper
 	rm -f $(DESTDIR)/usr/bin/gpgui
+	rm -f $(DESTDIR)/usr/bin/gpwidget
+	rm -rf $(DESTDIR)/usr/share/gpwidget
 
 	rm -f $(DESTDIR)/usr/libexec/gpclient/vpnc-script
 	rm -f $(DESTDIR)/usr/libexec/gpclient/hipreport.sh

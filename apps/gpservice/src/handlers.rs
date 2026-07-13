@@ -67,6 +67,13 @@ pub async fn update_gui(State(ctx): State<Arc<WsServerContext>>, body: Bytes) ->
 // Unpack GPGUI archive, gpgui_2.0.0_{arch}.bin.tar.xz and install it
 async fn install_gui(src: &str) -> anyhow::Result<()> {
   let target = binary_paths::gpgui();
+
+  // The gpgui path may be a symlink to the open-source gpwidget binary;
+  // File::create would write through it and destroy that installation.
+  if target.is_symlink() {
+    bail!("Refusing to install over symlink at {}", target.display());
+  }
+
   let Some(dir) = target.parent() else {
     bail!("Failed to get parent directory of GUI binary");
   };

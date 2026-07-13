@@ -1,0 +1,49 @@
+[package]
+name = "gpwidget"
+rust-version.workspace = true
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common = { path = "../../crates/common" }
+gpapi = { path = "../../crates/gpapi", features = ["clap", "webview-auth"] }
+
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+compile-time.workspace = true
+directories.workspace = true
+env_logger.workspace = true
+futures-util.workspace = true
+humantime.workspace = true
+log.workspace = true
+netdev.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "io-util",
+  "io-std",
+  "sync",
+  "time",
+  "signal",
+  "process",
+  "fs",
+] }
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+notify-rust.workspace = true
+uzers.workspace = true
+
+async-channel.workspace = true
+gtk4.workspace = true
+gtk4-layer-shell.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

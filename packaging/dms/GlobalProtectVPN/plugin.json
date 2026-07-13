@@ -1,0 +1,16 @@
+{
+    "id": "globalProtectVpn",
+    "name": "GlobalProtect VPN",
+    "description": "Status and control for GlobalProtect-openconnect via the gpwidget daemon",
+    "version": "2.6.4",
+    "license": "GPL-3.0",
+    "author": "GlobalProtect-openconnect",
+    "icon": "vpn_lock",
+    "component": "./GlobalProtectVPN.qml",
+    "settings": "./GlobalProtectSettings.qml",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}

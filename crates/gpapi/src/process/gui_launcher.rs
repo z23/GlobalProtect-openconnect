@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::bail;
 use common::binary_paths;
-use log::info;
+use log::{info, warn};
 use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::{process::gui_helper_launcher::GuiHelperLauncher, utils::base64};
@@ -43,11 +43,11 @@ impl<'a> GuiLauncher<'a> {
   }
 
   pub async fn launch(&self) -> anyhow::Result<ExitStatus> {
-    // Check if the program's version
+    // A version mismatch must not trigger download_program: the GUI here is the
+    // open-source gpwidget (installed as the gpgui symlink), and the downloaded
+    // proprietary gpgui would overwrite it through the symlink.
     if let Err(err) = self.check_version().await {
-      info!("Check version failed: {}", err);
-      // Download the program and replace the current one
-      self.download_program().await?;
+      warn!("GUI version check failed: {}, launching anyway", err);
     }
 
     self.launch_program().await
@@ -108,6 +108,7 @@ impl<'a> GuiLauncher<'a> {
     Ok(())
   }
 
+  #[allow(dead_code)]
   async fn download_program(&self) -> anyhow::Result<()> {
     let gui_helper = GuiHelperLauncher::new(self.api_key);
 
