@@ -79,8 +79,7 @@ PluginComponent {
         let msg = extra || {};
         msg.type = command;
         msg.id = ++cmdSeq;
-        gpSocket.write(JSON.stringify(msg) + "\n");
-        gpSocket.flush();
+        gpSocket.send(msg);
     }
 
     function doConnect(gateway) {
@@ -106,10 +105,19 @@ PluginComponent {
         }
     }
 
-    Socket {
+    // DankSocket (qs.Common) keeps a resilient link to the gpwidget daemon.
+    // Quickshell's raw Socket does NOT auto-reconnect (re-asserting connected=true
+    // is a no-op), so DankSocket toggles the link with exponential backoff as the
+    // VPN service comes and goes — mirroring how DMS's own services (NiriService)
+    // talk to a socket.
+    // DankSocket initiates only on a connected:false→true transition, so it is
+    // armed here after construction. A constant initial `connected: true` does
+    // NOT fire DankSocket's onConnectedChanged, so the link would never open.
+    Component.onCompleted: gpSocket.connected = true
+
+    DankSocket {
         id: gpSocket
         path: Quickshell.env("XDG_RUNTIME_DIR") + "/gpwidget.sock"
-        connected: true
 
         parser: SplitParser {
             onRead: message => {
@@ -126,20 +134,12 @@ PluginComponent {
             }
         }
 
-        onConnectedChanged: {
-            root.socketUp = connected;
-            if (!connected) {
+        onConnectionStateChanged: {
+            root.socketUp = linkUp;
+            if (!linkUp) {
                 root.snap = null;
             }
         }
-    }
-
-    // The daemon comes and goes with the VPN service; keep retrying quietly.
-    Timer {
-        interval: 2000
-        repeat: true
-        running: !root.socketUp
-        onTriggered: gpSocket.connected = true
     }
 
     // Local uptime/expiry tick while connected.
