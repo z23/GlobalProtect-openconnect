@@ -6,11 +6,24 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
   <img width="300" src="https://github.com/user-attachments/assets/2fb6116c-dc57-43f2-af75-9c3d97ab7122">
 </p>
 
+> **Fork notice** — This is a fork of [yuezk/GlobalProtect-openconnect](https://github.com/yuezk/GlobalProtect-openconnect) focused on an **open-source bar-widget GUI** (`gpwidget`) and packaging for EL10 / Fedora-family systems. Upstream remains the project of record; this fork is maintained for the divergences listed below (we do not currently open PRs upstream).
+>
+> **What this fork adds:**
+>
+> - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar** and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
+> - **`gpgui → gpwidget` symlink** so `gpservice` launches the open widget stack
+> - **Systemd user unit** and waybar module examples under `apps/gpwidget/assets/`
+> - **RPM / EL10 packaging** notes (incl. source-built `gtk4-layer-shell` where needed)
+> - **gpservice / gpwidget startup pairing** and DMS plugin live-status fixes
+>
+> Upstream CLI/GUI install docs still apply for distros this fork does not specialize. Report fork-specific issues against [z23/GlobalProtect-openconnect](https://github.com/z23/GlobalProtect-openconnect/issues).
+
 > **Inspired by** [gp-saml-gui](https://github.com/dlenski/gp-saml-gui)
 
 ## Table of Contents
 
 - [Features](#features)
+- [gpwidget (this fork)](#gpwidget-this-fork)
 - [Usage](#usage)
   - [Command-Line Interface](#command-line-interface)
   - [Graphical User Interface](#graphical-user-interface)
@@ -39,6 +52,22 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
 - **Direct Gateway Connection** – Bypass portal selection when needed
 - **Auto-Connect** – Automatically connect on system startup
 - **System Tray Integration** – Convenient system tray icon (requires [gnome-shell-extension-appindicator](https://extensions.gnome.org/extension/615/appindicator-support/) on GNOME)
+- **gpwidget (this fork)** – open-source waybar / DankMaterialShell status widget and popup panel (see below)
+
+## gpwidget (this fork)
+
+`gpwidget` is an open-source bar-widget GUI intended as a drop-in for proprietary `gpgui` on Wayland desktops.
+
+```sh
+make build            # includes gpwidget (BUILD_WIDGET=1 by default)
+sudo make install     # installs /usr/bin/gpwidget + gpgui symlink + assets
+gpclient launch-gui   # starts gpservice → gpwidget daemon
+```
+
+Optional autostart: enable the example user unit from
+`/usr/share/gpwidget/examples/systemd/gpwidget-stack.service`, or spawn
+`gpclient launch-gui` from your compositor. Full setup (waybar module, DMS
+plugin, config.toml, EL10 RPM notes) is in **[docs/widget.md](docs/widget.md)**.
 
 ## Usage
 
