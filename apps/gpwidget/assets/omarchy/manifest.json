@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "gpwidget.vpn",
+  "name": "GlobalProtect VPN",
+  "version": "1.0.0",
+  "author": "GlobalProtect-openconnect contributors",
+  "license": "GPL-3.0",
+  "description": "GlobalProtect status and controls for the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "GlobalProtect VPN",
+    "description": "Shows GlobalProtect status; opens the popup or toggles the tunnel.",
+    "category": "Network",
+    "aliases": ["vpn", "globalprotect", "gpwidget"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showGateway": true,
+      "refreshIntervalSec": 3
+    },
+    "schema": [
+      { "key": "showGateway", "type": "boolean", "label": "Show connected gateway", "defaultValue": true },
+      { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 1, "max": 60, "step": 1, "defaultValue": 3 }
+    ]
+  }
+}
