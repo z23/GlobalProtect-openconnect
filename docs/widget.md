@@ -141,13 +141,21 @@ mkdir -p ~/.config/omarchy/plugins/gpwidget.vpn
 cp /usr/share/gpwidget/examples/omarchy/manifest.json \
    /usr/share/gpwidget/examples/omarchy/BarWidget.qml \
    ~/.config/omarchy/plugins/gpwidget.vpn/
+# Discover the new plugin before enabling (hot-reload can race a fresh copy).
+omarchy-shell shell rescanPlugins
 omarchy plugin enable gpwidget.vpn --section right
 ```
 
 The compact widget follows Omarchy's bar sizing and theme. Left-click opens
 the full GTK layer-shell popup; right-click connects or disconnects. Its
 `showGateway` and `refreshIntervalSec` settings can be changed in the bar
-editor or in `~/.config/omarchy/shell.json`.
+editor or on the layout entry in `~/.config/omarchy/shell.json`, for example:
+
+```json
+{ "id": "gpwidget.vpn", "showGateway": true, "refreshIntervalSec": 3 }
+```
+
+inside `bar.layout.right` (or whichever section the widget occupies).
 
 ## Popup
 

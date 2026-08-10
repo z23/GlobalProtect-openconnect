@@ -1,7 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Commons
 import qs.Ui
 
 // Native Omarchy bar adapter for the gpwidget daemon. The full controls stay
@@ -67,19 +66,34 @@ BarWidget {
     command: ["gpwidget", "status"]
     running: false
 
+    // Buffer stdout until exit so we can reject non-zero status and avoid
+    // treating missing/failed gpwidget as a healthy stack-down snapshot.
     stdout: StdioCollector {
+      id: statusStdout
       waitForEnd: true
-      onStreamFinished: {
+    }
+
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
         try {
-          var value = JSON.parse(String(text || "{}"))
-          root.snapshot = value && typeof value === "object" ? value : ({ state: "stack-down" })
+          var raw = String(statusStdout.text || "").trim()
+          if (raw === "") {
+            root.snapshot = ({ state: "error", error: "Empty status response" })
+          } else {
+            var value = JSON.parse(raw)
+            if (value && typeof value === "object" && !Array.isArray(value) && value.state) {
+              root.snapshot = value
+            } else {
+              root.snapshot = ({ state: "error", error: "Invalid status response" })
+            }
+          }
         } catch (e) {
           root.snapshot = ({ state: "error", error: "Invalid status response" })
         }
+      } else {
+        root.snapshot = ({ state: "error", error: "gpwidget status failed" })
       }
-    }
 
-    onExited: {
       if (root.refreshQueued) {
         root.refreshQueued = false
         Qt.callLater(root.refresh)
