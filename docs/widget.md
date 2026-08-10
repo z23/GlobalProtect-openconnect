@@ -1,7 +1,7 @@
 # gpwidget — bar-widget GUI for GlobalProtect-openconnect
 
 `gpwidget` is an open-source (GPL-3.0) replacement for the proprietary
-`gpgui`: a VPN status widget for Wayland bars (waybar and
+`gpgui`: a VPN status widget for Wayland bars (waybar, Omarchy Shell and
 DankMaterialShell), with a layer-shell popup panel, desktop notifications,
 and the same browser-based Okta/SAML login flow as the official client.
 
@@ -129,6 +129,25 @@ dms ipc call plugins reload globalProtectVpn
 
 It provides a bar pill, a popout (status, gateway picker, stats,
 connect/disconnect), and a control-center VPN toggle.
+
+## Omarchy 4
+
+The native Omarchy Shell plugin ships at
+`/usr/share/gpwidget/examples/omarchy`. Install it as a user-owned plugin and
+add it to the right side of the bar:
+
+```sh
+mkdir -p ~/.config/omarchy/plugins/gpwidget.vpn
+cp /usr/share/gpwidget/examples/omarchy/manifest.json \
+   /usr/share/gpwidget/examples/omarchy/BarWidget.qml \
+   ~/.config/omarchy/plugins/gpwidget.vpn/
+omarchy plugin enable gpwidget.vpn --section right
+```
+
+The compact widget follows Omarchy's bar sizing and theme. Left-click opens
+the full GTK layer-shell popup; right-click connects or disconnects. Its
+`showGateway` and `refreshIntervalSec` settings can be changed in the bar
+editor or in `~/.config/omarchy/shell.json`.
 
 ## Popup
 
