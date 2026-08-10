@@ -10,9 +10,9 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
 >
 > **What this fork adds:**
 >
-> - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar** and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
+> - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar**, **Omarchy Shell**, and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
 > - **`gpgui → gpwidget` symlink** so `gpservice` launches the open widget stack
-> - **Systemd user unit** and waybar module examples under `apps/gpwidget/assets/`
+> - **Systemd user unit**, waybar module, and Omarchy Shell plugin examples under `apps/gpwidget/assets/`
 > - **RPM / EL10 packaging** notes (incl. source-built `gtk4-layer-shell` where needed)
 > - **gpservice / gpwidget startup pairing** and DMS plugin live-status fixes
 >
@@ -52,7 +52,7 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
 - **Direct Gateway Connection** – Bypass portal selection when needed
 - **Auto-Connect** – Automatically connect on system startup
 - **System Tray Integration** – Convenient system tray icon (requires [gnome-shell-extension-appindicator](https://extensions.gnome.org/extension/615/appindicator-support/) on GNOME)
-- **gpwidget (this fork)** – open-source waybar / DankMaterialShell status widget and popup panel (see below)
+- **gpwidget (this fork)** – open-source waybar / Omarchy Shell / DankMaterialShell status widget and popup panel (see below)
 
 ## gpwidget (this fork)
 
@@ -66,8 +66,9 @@ gpclient launch-gui   # starts gpservice → gpwidget daemon
 
 Optional autostart: enable the example user unit from
 `/usr/share/gpwidget/examples/systemd/gpwidget-stack.service`, or spawn
-`gpclient launch-gui` from your compositor. Full setup (waybar module, DMS
-plugin, config.toml, EL10 RPM notes) is in **[docs/widget.md](docs/widget.md)**.
+`gpclient launch-gui` from your compositor. Full setup (waybar module,
+Omarchy Shell plugin, DMS plugin, config.toml, EL10 RPM notes) is in
+**[docs/widget.md](docs/widget.md)**.
 
 ## Usage
 
