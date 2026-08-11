@@ -473,6 +473,13 @@ Verify the CLI client is working correctly:
 ./target/release/gpclient --help
 ```
 
+The Omarchy bar widget is a shipped QML asset rather than a compiled target, so
+its logic has its own suite (requires `node`, not the Rust toolchain):
+
+```bash
+make test-omarchy-widget
+```
+
 ### Build Options
 
 - `BUILD_GUI_HELPER=0` – Build CLI components only (excludes GUI)

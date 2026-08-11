@@ -138,6 +138,12 @@ build-rs:
 		$(CARGO) build $(CARGO_BUILD_ARGS) -p gpwidget; \
 	fi
 
+# Logic tests for the Omarchy bar widget. Not wired into `build`, since the
+# widget is a shipped QML asset rather than a compiled target, and this needs
+# node rather than the Rust toolchain.
+test-omarchy-widget:
+	node apps/gpwidget/assets/omarchy/BarWidget.test.js
+
 clean:
 	$(CARGO) clean
 	rm -rf .build
