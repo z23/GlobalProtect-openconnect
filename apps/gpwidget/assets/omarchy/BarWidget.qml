@@ -36,6 +36,10 @@ BarWidget {
   // `snapshot`: the next poll overwrites that within one interval, and the
   // whole point is that the user learns why their click did nothing.
   property string actionError: ""
+  // The state the failure was observed in, so it can be cleared the moment the
+  // daemon moves anywhere else. Clearing on connected/busy alone would strand a
+  // permanent fault after a disconnect that reported failure but took effect.
+  property string actionErrorState: ""
 
   readonly property string vpnState: String(snapshot.state || "stack-down")
   readonly property bool connected: vpnState === "connected"
@@ -54,18 +58,33 @@ BarWidget {
     var value = root.setting(name, fallback)
     if (typeof value === "string") {
       var text = value.trim().toLowerCase()
-      return text !== "" && text !== "false" && text !== "0" && text !== "no"
+      return ["", "false", "0", "no", "off"].indexOf(text) === -1
     }
     return !!value
   }
 
-  // Diagnostics land in the tooltip, which is single-line per entry and sits in
-  // the bar — take the headline and cap it.
-  function firstLine(text) {
-    var trimmed = String(text || "").trim()
-    if (trimmed === "") return ""
-    var line = trimmed.split("\n")[0].trim()
-    return line.length > 120 ? line.slice(0, 119) + "…" : line
+  // Pick the actual cause out of a CLI stderr dump for the tooltip, which is
+  // single-line per entry.
+  //
+  // Not the first line: gpwidget defaults to InfoLevelVerbosity, so the launch
+  // path emits `INFO ... Starting VPN service stack via ...` before anything
+  // goes wrong, while cli.rs prints the real cause last as `Error: ...`. Taking
+  // the head would report the banner as the failure in precisely the
+  // polkit-denied case this text exists to explain.
+  function errorLine(text) {
+    var lines = String(text || "").split("\n")
+      .map(function(line) { return line.trim() })
+      .filter(function(line) { return line !== "" })
+    if (lines.length === 0) return ""
+
+    var chosen = lines[lines.length - 1]
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].indexOf("Error:") === 0) {
+        chosen = lines[i].slice("Error:".length).trim()
+        break
+      }
+    }
+    return chosen.length > 120 ? chosen.slice(0, 119) + "…" : chosen
   }
 
   // NUL-joined so gateway or error text containing the separator cannot make
@@ -87,6 +106,11 @@ BarWidget {
 
   function setError(message) {
     root.applySnapshot({ state: "error", error: message })
+  }
+
+  function setActionError(message) {
+    root.actionError = message
+    root.actionErrorState = root.vpnState
   }
 
   function stateLabel() {
@@ -129,14 +153,22 @@ BarWidget {
   function toggle() {
     if (toggleProcess.running) return
     root.actionError = ""
+    root.actionErrorState = ""
     toggleProcess.sawExit = false
     toggleProcess.running = true
     refreshDelay.restart()
   }
 
-  // A state change means something actually happened, so a stale "your last
-  // click failed" would outlive the condition it described.
-  onVpnStateChanged: if (connected || busy) root.actionError = ""
+  // A move away from the state the failure was seen in means something actually
+  // happened, so a stale "your last click failed" would outlive the condition it
+  // described. Anchoring on the recorded state rather than clearing on every
+  // change keeps a poll landing mid-toggle from erasing a fresh error.
+  onVpnStateChanged: {
+    if (root.actionError !== "" && root.vpnState !== root.actionErrorState) {
+      root.actionError = ""
+      root.actionErrorState = ""
+    }
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -147,9 +179,14 @@ BarWidget {
     // which coerces to 0 on the Timer's int interval — on a repeating,
     // triggeredOnStart timer that is a hot loop spawning back-to-back status
     // processes, so fall back rather than clamp.
+    //
+    // The upper clamp is not cosmetic: an interval in milliseconds that exceeds
+    // int range wraps through ToInt32, and 2^29 seconds lands back on exactly
+    // 0 ms — the same hot loop, reached from the opposite end.
     interval: {
       var seconds = Number(root.setting("refreshIntervalSec", 3))
-      return (isFinite(seconds) ? Math.max(1, seconds) : 3) * 1000
+      if (!isFinite(seconds)) seconds = 3
+      return Math.min(3600, Math.max(1, seconds)) * 1000
     }
     running: true
     repeat: true
@@ -171,6 +208,22 @@ BarWidget {
       // still arrives (and is ignored, below).
       statusProcess.running = false
       root.setError("gpwidget status timed out")
+      statusKill.restart()
+    }
+  }
+
+  // SIGTERM is a request. If the process ignores it or is stuck in uninterruptible
+  // sleep, `running` never clears and refresh() early-returns forever — polling
+  // would be dead for the life of the session. Quickshell exposes no kill(), so
+  // escalate out of band.
+  Timer {
+    id: statusKill
+    interval: 2000
+    repeat: false
+    onTriggered: {
+      if (!statusProcess.running) return
+      var pid = statusProcess.processId
+      if (pid) Quickshell.execDetached(["kill", "-KILL", String(pid)])
     }
   }
 
@@ -202,13 +255,16 @@ BarWidget {
     onExited: function(exitCode) {
       statusProcess.sawExit = true
       statusWatchdog.stop()
+      // The process is gone, so escalation is moot — and leaving it armed would
+      // fire SIGKILL at whatever pid the next poll happens to get.
+      statusKill.stop()
 
       // The watchdog caused this exit and already reported something more
       // useful than the signal that killed it.
       if (statusProcess.timedOut) return
 
       if (exitCode !== 0) {
-        root.setError(root.firstLine(statusStderr.text) || "gpwidget status failed")
+        root.setError(root.errorLine(statusStderr.text) || "gpwidget status failed")
         return
       }
 
@@ -221,7 +277,7 @@ BarWidget {
       try {
         var value = JSON.parse(raw)
         if (value && typeof value === "object" && !Array.isArray(value) && value.state) {
-          root.applySnapshot(raw, value)
+          root.applySnapshot(value)
         } else {
           root.setError("Invalid status response")
         }
@@ -236,6 +292,7 @@ BarWidget {
       // would sit on its initial stack-down snapshot and look benign.
       if (!statusProcess.running && !statusProcess.sawExit) {
         statusWatchdog.stop()
+        statusKill.stop()
         root.setError("gpwidget not found on PATH")
       }
     }
@@ -260,14 +317,14 @@ BarWidget {
     onExited: function(exitCode) {
       toggleProcess.sawExit = true
       if (exitCode !== 0) {
-        root.actionError = root.firstLine(toggleStderr.text) || "gpwidget toggle failed"
+        root.setActionError(root.errorLine(toggleStderr.text) || "gpwidget toggle failed")
       }
       root.broadcast("refresh")
     }
 
     onRunningChanged: {
       if (!toggleProcess.running && !toggleProcess.sawExit) {
-        root.actionError = "gpwidget not found on PATH"
+        root.setActionError("gpwidget not found on PATH")
       }
     }
   }
@@ -293,8 +350,13 @@ BarWidget {
     // An unconfigured portal is not a working tunnel; without needs-setup here
     // it renders pixel-identical to a connected one whenever the gateway name
     // is hidden.
-    dimmed: root.vpnState === "stack-down" || root.vpnState === "disconnected"
-      || root.vpnState === "needs-setup"
+    //
+    // Never dim a fault. WidgetButton multiplies dimmed state to 0.45 opacity,
+    // and the two overlap exactly where it hurts — a failed toggle against a
+    // down stack would wash the urgent accent out to nearly invisible.
+    dimmed: !root.faulted
+      && (root.vpnState === "stack-down" || root.vpnState === "disconnected"
+        || root.vpnState === "needs-setup")
     tooltipText: root.tooltip()
 
     // WidgetButton's MouseArea accepts middle-click too and forwards it here;
