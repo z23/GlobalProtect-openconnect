@@ -212,19 +212,15 @@ BarWidget {
     }
   }
 
-  // SIGTERM is a request. If the process ignores it or is stuck in uninterruptible
-  // sleep, `running` never clears and refresh() early-returns forever — polling
-  // would be dead for the life of the session. Quickshell exposes no kill(), so
-  // escalate out of band.
+  // SIGTERM is a request. If the process ignores it or is wedged, `running`
+  // never clears and refresh() early-returns for the rest of the session, since
+  // the watchdog is only ever re-armed from inside refresh(). Escalate, as
+  // Quickshell's own Process docs prescribe for this case.
   Timer {
     id: statusKill
     interval: 2000
     repeat: false
-    onTriggered: {
-      if (!statusProcess.running) return
-      var pid = statusProcess.processId
-      if (pid) Quickshell.execDetached(["kill", "-KILL", String(pid)])
-    }
+    onTriggered: if (statusProcess.running) statusProcess.signal(9)
   }
 
   Process {
