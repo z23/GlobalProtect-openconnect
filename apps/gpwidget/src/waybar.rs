@@ -4,7 +4,6 @@
 //! update. Socket absence renders as the synthesized `stack-down` state and
 //! the socket is re-tried every 2 seconds.
 
-use std::io::Write;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -77,11 +76,8 @@ fn emit(last_line: &mut Option<String>, status: Option<&StatusMsg>, config: &Con
     return;
   }
 
-  let mut stdout = std::io::stdout().lock();
-  // Waybar reads a line per update; a failed write means waybar is gone.
-  if writeln!(stdout, "{}", json).and_then(|_| stdout.flush()).is_err() {
-    std::process::exit(0);
-  }
+  // A failed write means the parent (waybar / bar) is gone — not a gpwidget error.
+  crate::client::print_line_or_exit(&json);
 
   *last_line = Some(json);
 }
@@ -140,7 +136,10 @@ fn build_line(status: Option<&StatusMsg>, show_gateway: bool, now: u64) -> Wayba
           ));
         }
 
-        tooltip_lines.push(format!("Uptime: {}", ux::format_duration_short(now.saturating_sub(conn.since))));
+        tooltip_lines.push(format!(
+          "Uptime: {}",
+          ux::format_duration_short(now.saturating_sub(conn.since))
+        ));
 
         if conn.rx_bytes > 0 || conn.tx_bytes > 0 {
           tooltip_lines.push(format!(
@@ -174,7 +173,9 @@ fn build_line(status: Option<&StatusMsg>, show_gateway: bool, now: u64) -> Wayba
 
   WaybarLine {
     text,
-    alt: state.map(|s| s.as_str().to_string()).unwrap_or_else(|| "stack-down".to_string()),
+    alt: state
+      .map(|s| s.as_str().to_string())
+      .unwrap_or_else(|| "stack-down".to_string()),
     tooltip: tooltip_lines.join("\n"),
     class: classes,
     percentage,
