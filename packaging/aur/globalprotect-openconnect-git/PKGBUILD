@@ -1,28 +1,58 @@
-# Maintainer: Kevin Yue <k3vinyue@gmail.com>
+# Maintainer: z23 <z23@users.noreply.github.com>
+# Builds this fork (gpwidget), not the upstream extra/AUR packages.
 
 _pkgname_prefix=globalprotect-openconnect
 pkgname="${_pkgname_prefix}-git"
-pkgver=2.5.1.r1.g24f9bbb
-pkgrel=2
-pkgdesc="A GUI client for GlobalProtect VPN, based on OpenConnect, supports the SSO authentication method."
+pkgver=2.6.5.r0.g0000000
+pkgrel=1
+pkgdesc="GlobalProtect VPN client (OpenConnect) with an open-source gpwidget GUI"
 arch=(x86_64 aarch64)
-url="https://github.com/yuezk/GlobalProtect-openconnect"
-license=('GPL3')
+url="https://github.com/z23/GlobalProtect-openconnect"
+license=('GPL-3.0-only')
 
-makedepends=(git pkg-config 'openconnect>=8.20' webkit2gtk-4.1 curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg libsecret cargo)
-depends=(vpnc openssl webkit2gtk-4.1 libappindicator-gtk3 libsecret libxml2 shared-mime-info desktop-file-utils)
-optdepends=('wmctrl: for window management')
+makedepends=(
+  git
+  rust
+  make
+  pkgconf
+  file
+  autoconf
+  automake
+  gettext
+  libtool
+  patch
+)
+depends=(
+  gtk4
+  gtk4-layer-shell
+  webkit2gtk-4.1
+  openssl
+  gnutls
+  libxml2
+  zlib
+  lz4
+  p11-kit
+  nettle
+  gmp
+  polkit
+  xdg-utils
+  shared-mime-info
+  desktop-file-utils
+)
+optdepends=(
+  'gnome-keyring: store portal credentials'
+)
 
 conflicts=('globalprotect-openconnect')
-provides=('globalprotect-openconnect' 'gpclient' 'gpservice' 'gpauth' 'gpgui')
+provides=('globalprotect-openconnect' 'gpclient' 'gpservice' 'gpauth' 'gpgui' 'gpwidget')
 
 install=gp.install
 
-source=("${_pkgname_prefix}::git+https://github.com/yuezk/GlobalProtect-openconnect.git#branch=main")
+source=("${_pkgname_prefix}::git+https://github.com/z23/GlobalProtect-openconnect.git#branch=main")
 
 sha256sums=("SKIP")
 
-options=('!strip')
+options=('!strip' '!debug')
 
 pkgver() {
   cd "${_pkgname_prefix}"
@@ -32,21 +62,24 @@ pkgver() {
 
 prepare() {
   cd "${_pkgname_prefix}"
-  git submodule update --init --recursive
+  git submodule update --init crates/openconnect/deps/openconnect
+
+  # Distro rust, not the repo's rustup pin
+  rm -f rust-toolchain.toml
 
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  # Must unset the CFLAGS, otherwise the build fails on linking openssl, don't know why
+  # Arch CFLAGS break the bundled OpenConnect/OpenSSL link
   unset CFLAGS
 
   cd "${_pkgname_prefix}"
-  cargo build --frozen --release
+  make build BUILD_GUI_HELPER=0 DISABLE_RUST_TOOLCHAIN=1 CARGO_BUILD_ARGS='--release --frozen'
 }
 
 package() {
   cd "${_pkgname_prefix}"
 
-  DESTDIR="$pkgdir" make install
+  make install DESTDIR="$pkgdir" BUILD_GUI_HELPER=0
 }

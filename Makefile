@@ -91,6 +91,12 @@ tarball: clean-tarball
 		touch OFFLINE_BUILD; \
 	fi
 
+	if [ ! -f crates/openconnect/deps/openconnect/configure.ac ]; then \
+		echo "error: OpenConnect sources missing under crates/openconnect/deps/openconnect." >&2; \
+		echo "Run: git submodule update --init crates/openconnect/deps/openconnect" >&2; \
+		exit 1; \
+	fi
+
 	@echo "Creating tarball..."
 	tar --exclude .vendor --exclude target --transform 's,^,${PKG}/,' -czf .build/tarball/${PKG}.tar.gz * .cargo
 
@@ -110,6 +116,12 @@ download-gui:
 build: download-gui build-rs
 
 build-rs:
+	if [ ! -f crates/openconnect/deps/openconnect/configure.ac ]; then \
+		echo "error: OpenConnect sources missing under crates/openconnect/deps/openconnect." >&2; \
+		echo "Run: git submodule update --init crates/openconnect/deps/openconnect" >&2; \
+		exit 1; \
+	fi
+
 	if [ $(OFFLINE) -eq 1 ]; then \
 		tar -xJf vendor.tar.xz; \
 	fi

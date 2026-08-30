@@ -57,6 +57,32 @@ sudo dnf install -y .build/rpm/globalprotect-openconnect-*.$(uname -m).rpm
 Remove any stray manual installs first (`ls /usr/local/bin/gp*`) — binaries
 in /usr/local/bin shadow the packaged ones on most PATHs.
 
+### Arch Linux (incl. Omarchy)
+
+Arch `extra/globalprotect-openconnect` and AUR `globalprotect-openconnect-git`
+are upstream packages and do **not** ship `gpwidget`. Build this fork:
+
+```sh
+sudo pacman -S --needed \
+    base-devel rust git \
+    gtk4 gtk4-layer-shell webkit2gtk-4.1 \
+    openssl gnutls libxml2 zlib lz4 p11-kit nettle gmp polkit
+git submodule update --init crates/openconnect/deps/openconnect
+make pkgbuild                                 # output in .build/pkgbuild/
+sudo pacman -U .build/pkgbuild/globalprotect-openconnect-*.pkg.tar.zst
+```
+
+`make pkgbuild` builds with `BUILD_GUI_HELPER=0` (gpwidget, no proprietary
+GUI updater) and Arch `rust` rather than the repo's rustup pin. Direct:
+
+```sh
+make build BUILD_GUI_HELPER=0
+sudo make install BUILD_GUI_HELPER=0
+```
+
+Works on **x86_64** and **aarch64**. After install, copy the Omarchy plugin
+as below (or the waybar module under `/usr/share/gpwidget/examples/waybar/`).
+
 ## Autostart (optional)
 
 Start the stack at login so the widget shows live status immediately (the
@@ -64,7 +90,8 @@ VPN is not dialed unless `auto-connect = true`):
 
 - **niri**: `spawn-at-startup "gpclient" "launch-gui"` in
   `~/.config/niri/config.kdl`, or
-- **systemd user unit**: copy
+- **systemd user unit** (Hyprland / Omarchy / UWSM sessions import
+  `graphical-session.target`): copy
   `/usr/share/gpwidget/examples/systemd/gpwidget-stack.service` to
   `~/.config/systemd/user/` and `systemctl --user enable --now gpwidget-stack`.
 

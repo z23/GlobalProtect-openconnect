@@ -6,13 +6,14 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
   <img width="300" src="https://github.com/user-attachments/assets/2fb6116c-dc57-43f2-af75-9c3d97ab7122">
 </p>
 
-> **Fork notice** — This is a fork of [yuezk/GlobalProtect-openconnect](https://github.com/yuezk/GlobalProtect-openconnect) focused on an **open-source bar-widget GUI** (`gpwidget`) and packaging for EL10 / Fedora-family systems. Upstream remains the project of record; this fork is maintained for the divergences listed below (we do not currently open PRs upstream).
+> **Fork notice** — This is a fork of [yuezk/GlobalProtect-openconnect](https://github.com/yuezk/GlobalProtect-openconnect) focused on an **open-source bar-widget GUI** (`gpwidget`) and packaging for **Arch Linux** (incl. Omarchy, x86_64 and aarch64) and EL10 / Fedora-family systems. Upstream remains the project of record; this fork is maintained for the divergences listed below (we do not currently open PRs upstream).
 >
 > **What this fork adds:**
 >
 > - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar**, **Omarchy Shell**, and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
 > - **`gpgui → gpwidget` symlink** so `gpservice` launches the open widget stack
 > - **Systemd user unit**, waybar module, and Omarchy Shell plugin examples under `apps/gpwidget/assets/`
+> - **Arch Linux packaging** (`make pkgbuild`) with `gtk4` / `gtk4-layer-shell` on x86_64 and aarch64
 > - **RPM / EL10 packaging** notes (incl. source-built `gtk4-layer-shell` where needed)
 > - **gpservice / gpwidget startup pairing** and DMS plugin live-status fixes
 >
@@ -29,7 +30,7 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
   - [Graphical User Interface](#graphical-user-interface)
 - [Installation](#installation)
   - [Debian / Ubuntu](#debian--ubuntu)
-  - [Arch Linux / Manjaro](#arch-linux--manjaro)
+  - [Arch Linux / Manjaro / Omarchy](#arch-linux--manjaro--omarchy)
   - [Fedora 38+ / Rawhide](#fedora-38--rawhide)
   - [openSUSE Leap 15.6+ / Tumbleweed](#opensuse-leap-156--tumbleweed)
   - [Other RPM-based Distributions](#other-rpm-based-distributions)
@@ -163,39 +164,31 @@ Download the latest `.deb` package from the [releases](https://github.com/yuezk/
 sudo apt install --fix-broken globalprotect-openconnect_*.deb
 ```
 
-### Arch Linux / Manjaro
+### Arch Linux / Manjaro / Omarchy
 
-#### Option 1: Install from AUR
+Arch `extra/globalprotect-openconnect` and the AUR `globalprotect-openconnect-git` package are **upstream**. They do not include this fork's `gpwidget` stack.
 
-Package: [globalprotect-openconnect-git](https://aur.archlinux.org/packages/globalprotect-openconnect-git/)
-
-You can install it using an AUR helper like [`yay`](https://github.com/Jguer/yay):
+Build this fork from the repo (`x86_64` and `aarch64`):
 
 ```bash
-yay -S globalprotect-openconnect-git
+sudo pacman -S --needed \
+  base-devel rust git \
+  gtk4 gtk4-layer-shell webkit2gtk-4.1 \
+  openssl gnutls libxml2 zlib lz4 p11-kit nettle gmp polkit
+
+git submodule update --init crates/openconnect/deps/openconnect
+make pkgbuild    # uses distro rust; output in .build/pkgbuild/
+sudo pacman -U .build/pkgbuild/globalprotect-openconnect-*.pkg.tar.zst
 ```
 
-#### Option 2: Install from the Official Extra Repository
-
-The package is also available in the official Arch Linux Extra repository.
-
-Package: [globalprotect-openconnect](https://archlinux.org/packages/extra/x86_64/globalprotect-openconnect/)
-
-> [!Note]
->
-> Since the official package does not include the system tray support dependency, you need to install `libappindicator` manually:
+Or install straight from the build tree (same `BUILD_GUI_HELPER=0` as the package — skips the proprietary-GUI updater):
 
 ```bash
-sudo pacman -S libappindicator globalprotect-openconnect
+make build BUILD_GUI_HELPER=0
+sudo make install BUILD_GUI_HELPER=0
 ```
 
-#### Option 3: Install from Package
-
-Download the latest package from the [releases](https://github.com/yuezk/GlobalProtect-openconnect/releases) page, then install:
-
-```bash
-sudo pacman -U globalprotect-openconnect-*.pkg.tar.zst
-```
+If `rustup` is installed, `make build` honors `rust-toolchain.toml` (Rust 1.89). `make pkgbuild` deletes that pin and uses Arch `rust` (1.89+). After install, enable the Omarchy bar plugin and optional autostart as in [docs/widget.md](docs/widget.md).
 
 ### Fedora 38+ / Rawhide
 
@@ -444,9 +437,10 @@ This project includes a DevContainer configuration that provides a consistent, r
 #### Prerequisites
 
 - [Rust 1.89 or later](https://www.rust-lang.org/tools/install)
-- [Tauri dependencies](https://tauri.app/start/prerequisites/)
 - OpenConnect source-build dependencies: `autoconf`, `automake`, `autopoint`/`gettext`, `libtool`, `patch`, `pkg-config`, `libxml2`, `zlib`, `lz4`, `gnutls`, `p11-kit`, `nettle`, and `gmp` development packages
+- `gpwidget`: `gtk4` and `gtk4-layer-shell` (plus `webkit2gtk-4.1` for embedded SAML/Okta in `gpauth`)
 - `pkexec` and `gnome-keyring` (or `pam_kwallet` on KDE)
+- [Tauri dependencies](https://tauri.app/start/prerequisites/) only if you build `gpgui-helper` (`BUILD_GUI_HELPER=1`)
 - `nodejs` and `pnpm` (optional)
 
 #### Build Steps
@@ -467,7 +461,7 @@ This project includes a DevContainer configuration that provides a consistent, r
    sudo make install
    ```
 
-   > **Note:** `DESTDIR` is not currently supported.
+   `DESTDIR` is supported (`make install DESTDIR=/path`). Packaging uses it.
 
 ### Testing Your Build
 
