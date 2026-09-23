@@ -2218,6 +2218,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "uzers",
  "whoami",
  "xmltree",
 ]

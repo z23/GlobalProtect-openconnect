@@ -263,7 +263,10 @@ This repository includes a flake for NixOS integration.
 
 #### Installation Steps
 
-Add the flake input and package to your `flake.nix`:
+Add the flake input and NixOS module to your `flake.nix`:
+
+The module builds the package with your NixOS configuration's `pkgs`, so the
+GlobalProtect GUI and the system use the same Nixpkgs dependency versions.
 
 ```nix
 {
@@ -282,11 +285,11 @@ Add the flake input and package to your `flake.nix`:
 
         modules = [
           ./configuration.nix
+          globalprotect-openconnect.nixosModules.default
           {
-            services.ayatana-indicators.enable = true;
+            programs.globalprotect-openconnect.enable = true;
 
             environment.systemPackages = [
-              globalprotect-openconnect.packages.${system}.default
               nixpkgs.legacyPackages.${system}.gnomeExtensions.appindicator
             ];
           }
