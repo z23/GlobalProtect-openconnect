@@ -11,11 +11,11 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
 > **What this fork adds:**
 >
 > - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar**, **Omarchy Shell**, and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
-> - **`gpgui → gpwidget` symlink** so `gpservice` launches the open widget stack
+> - **`/usr/bin/gpgui` wrapper** (a regular file, not a symlink) so `gpservice` launches the open widget stack
 > - **Systemd user unit**, waybar module, and Omarchy Shell plugin examples under `apps/gpwidget/assets/`
 > - **Arch Linux packaging** (`make pkgbuild`) with `gtk4` / `gtk4-layer-shell` on x86_64 and aarch64
 > - **RPM / EL10 packaging** notes (incl. source-built `gtk4-layer-shell` where needed)
-> - **gpservice / gpwidget startup pairing** and DMS plugin live-status fixes
+> - **gpservice startup that does not depend on lock-file mode or a matching build version**, and DMS plugin live-status fixes
 >
 > Upstream CLI/GUI install docs still apply for distros this fork does not specialize. Report fork-specific issues against [z23/GlobalProtect-openconnect](https://github.com/z23/GlobalProtect-openconnect/issues).
 
@@ -61,7 +61,7 @@ A modern GlobalProtect VPN client for Linux, built on OpenConnect with full supp
 
 ```sh
 make build            # includes gpwidget (BUILD_WIDGET=1 by default)
-sudo make install     # installs /usr/bin/gpwidget + gpgui symlink + assets
+sudo make install     # installs /usr/bin/gpwidget, a gpgui wrapper, and assets
 gpclient launch-gui   # starts gpservice → gpwidget daemon
 ```
 

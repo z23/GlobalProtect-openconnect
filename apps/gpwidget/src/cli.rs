@@ -8,9 +8,11 @@ use log::info;
 
 use crate::{client, config::Config, daemon, popup};
 
-// The second whitespace token must equal gpservice's CARGO_PKG_VERSION:
-// GuiLauncher::check_version parses `split_whitespace().nth(1)` from
-// `gpwidget --version` before launching us as the GUI.
+// Shown by `gpwidget --version` when no gpservice binary can be queried.
+// GuiLauncher compares the second whitespace token with gpservice's
+// CARGO_PKG_VERSION and, on a mismatch, downloads the proprietary GUI over
+// the gpgui path. The running binary reports gpservice's own token instead
+// of this compile-time string. See `version_token`.
 pub const VERSION: &str = concat!(
   env!("CARGO_PKG_VERSION"),
   " (",
@@ -88,10 +90,19 @@ impl Cli {
 }
 
 fn init_logger(cli: &Cli) {
-  env_logger::builder().filter_level(cli.verbose.log_level_filter()).init();
+  env_logger::builder()
+    .filter_level(cli.verbose.log_level_filter())
+    .init();
 }
 
 pub fn run() {
+  // Intercept before clap. Clap would print CARGO_PKG_VERSION, which matches
+  // gpservice only when both binaries come from one workspace build.
+  if is_version_flag(std::env::args().nth(1).as_deref()) {
+    println!("gpwidget {}", version_token());
+    return;
+  }
+
   let cli = Cli::parse();
 
   init_logger(&cli);
@@ -106,6 +117,53 @@ pub fn run() {
     eprintln!("Error: {}", err);
     std::process::exit(1);
   }
+}
+
+fn is_version_flag(arg: Option<&str>) -> bool {
+  matches!(arg, Some("--version" | "-V"))
+}
+
+/// Second whitespace field of `gpservice --version` (`2.6.5`, not the commit
+/// or the build date). That is the token `GuiLauncher::check_version` requires.
+pub(crate) fn version_token_from_stdout(stdout: &str) -> Option<&str> {
+  stdout.split_whitespace().nth(1)
+}
+
+pub(crate) fn version_token_or_fallback(stdout: Option<&str>) -> String {
+  stdout
+    .and_then(version_token_from_stdout)
+    .unwrap_or(env!("CARGO_PKG_VERSION"))
+    .to_string()
+}
+
+fn version_token() -> String {
+  version_token_or_fallback(gpservice_version_stdout().as_deref())
+}
+
+fn gpservice_version_stdout() -> Option<String> {
+  let mut candidates = Vec::new();
+
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      candidates.push(dir.join("gpservice"));
+    }
+  }
+
+  // Absolute path: gpservice clears the GUI environment when an env file is
+  // set, so PATH may be empty.
+  candidates.push(std::path::PathBuf::from("/usr/bin/gpservice"));
+
+  for path in candidates {
+    let Ok(output) = std::process::Command::new(&path).arg("--version").output() else {
+      continue;
+    };
+
+    if output.status.success() {
+      return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+  }
+
+  None
 }
 
 fn run_async(cli: Cli) -> anyhow::Result<()> {
@@ -138,4 +196,24 @@ fn run_async(cli: Cli) -> anyhow::Result<()> {
       Some(Command::Popup) => unreachable!("handled before the runtime starts"),
     }
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn version_token_is_the_second_field() {
+    assert_eq!(
+      version_token_from_stdout("gpservice 2.6.5 (abc1234 2026-08-05)"),
+      Some("2.6.5")
+    );
+  }
+
+  #[test]
+  fn missing_gpservice_stdout_falls_back_to_crate_version() {
+    assert_eq!(version_token_or_fallback(None), env!("CARGO_PKG_VERSION"));
+    assert_eq!(version_token_or_fallback(Some("gpservice")), env!("CARGO_PKG_VERSION"));
+    assert_eq!(version_token_or_fallback(Some("gpservice 2.6.5 (abc)")), "2.6.5");
+  }
 }

@@ -66,18 +66,34 @@ impl Model {
   }
 
   pub fn apply_vpn_state(&mut self, vpn_state: VpnState) {
+    // `portal` and `gateways` are private on upstream `ConnectInfo`. The
+    // serialized state carries them; `session_info()` is already public.
+    let wire = serde_json::to_value(&vpn_state).ok();
+
     match &vpn_state {
-      VpnState::Connecting(info) => {
-        self.portal = Some(info.portal().to_string());
-        self.current_gateway = Some(gateway_info(info.gateway()));
-        self.known_gateways = info.gateways().iter().map(gateway_info).collect();
+      VpnState::Connecting(_) => {
+        if let Some(view) = wire
+          .as_ref()
+          .and_then(|value| value.get("connecting"))
+          .and_then(connect_view)
+        {
+          self.portal = Some(view.portal);
+          self.current_gateway = Some(gateway_info(&view.gateway));
+          self.known_gateways = view.gateways.iter().map(gateway_info).collect();
+        }
         self.session = None;
       }
       VpnState::Connected(connected) => {
-        let info = connected.info();
-        self.portal = Some(info.portal().to_string());
-        self.current_gateway = Some(gateway_info(info.gateway()));
-        self.known_gateways = info.gateways().iter().map(gateway_info).collect();
+        if let Some(view) = wire
+          .as_ref()
+          .and_then(|value| value.get("connected"))
+          .and_then(|value| value.get("info"))
+          .and_then(connect_view)
+        {
+          self.portal = Some(view.portal);
+          self.current_gateway = Some(gateway_info(&view.gateway));
+          self.known_gateways = view.gateways.iter().map(gateway_info).collect();
+        }
         self.session = connected.session_info().map(session_summary);
 
         // Preserve the original connect time across repeated Connected
@@ -116,6 +132,24 @@ impl Model {
       error: self.last_error.clone(),
     }
   }
+}
+
+struct ConnectView {
+  portal: String,
+  gateway: Gateway,
+  gateways: Vec<Gateway>,
+}
+
+fn connect_view(value: &serde_json::Value) -> Option<ConnectView> {
+  let portal = value.get("portal")?.as_str()?.to_string();
+  let gateway = serde_json::from_value(value.get("gateway")?.clone()).ok()?;
+  let gateways = serde_json::from_value(value.get("gateways")?.clone()).ok()?;
+
+  Some(ConnectView {
+    portal,
+    gateway,
+    gateways,
+  })
 }
 
 fn gateway_info(gateway: &Gateway) -> GatewayInfo {

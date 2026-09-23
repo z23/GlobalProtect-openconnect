@@ -21,8 +21,9 @@ CLI ─────────────────── gpwidget connect|d
 ## How it works
 
 gpservice hands its per-launch WebSocket key only to the GUI binary it
-launches itself, so `gpwidget` is installed with a `gpgui → gpwidget`
-symlink. `gpclient launch-gui` starts gpservice via polkit (no password
+launches itself, so the install provides `/usr/bin/gpgui` as a regular-file
+wrapper that execs `/usr/bin/gpwidget`. `gpclient launch-gui` starts
+gpservice via polkit (no password
 prompt for an active local session); gpservice launches the gpwidget daemon,
 which serves widgets over a unix socket. Connecting runs the standard flow —
 portal prelogin → gpauth (embedded WebKit window by default; Okta 2FA
@@ -38,7 +39,7 @@ Built and installed with the rest of the project:
 
 ```sh
 make build            # includes gpwidget (BUILD_WIDGET=1 default)
-sudo make install     # installs /usr/bin/gpwidget + gpgui symlink + assets
+sudo make install     # installs /usr/bin/gpwidget, a gpgui wrapper, and assets
 ```
 
 ### RPM (EL10 / Fedora-family)

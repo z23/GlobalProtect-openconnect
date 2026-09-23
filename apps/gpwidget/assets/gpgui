@@ -1,0 +1,4 @@
+#!/bin/sh
+# gpservice launches this path. Exec the real binary so a later GUI
+# download replaces the wrapper and leaves /usr/bin/gpwidget in place.
+exec /usr/bin/gpwidget "$@"

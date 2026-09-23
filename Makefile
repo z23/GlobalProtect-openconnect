@@ -178,12 +178,14 @@ install:
 		install -Dm755 .build/gpgui/gpgui_*/gpgui $(DESTDIR)/usr/bin/gpgui; \
 	fi
 
-	# Install gpwidget; unless the proprietary gpgui was installed above,
-	# also provide the gpgui name so gpservice launches gpwidget as the GUI.
+	# Install gpwidget. Unless the proprietary gpgui was installed above,
+	# also install a regular-file wrapper at the gpgui path so gpservice
+	# launches gpwidget. A symlink would be followed by install_gui and
+	# truncate the real binary.
 	if [ $(BUILD_WIDGET) -eq 1 ]; then \
 		install -Dm755 target/release/gpwidget $(DESTDIR)/usr/bin/gpwidget; \
 		if [ ! -e $(DESTDIR)/usr/bin/gpgui ]; then \
-			ln -snf gpwidget $(DESTDIR)/usr/bin/gpgui; \
+			install -Dm755 apps/gpwidget/assets/gpgui $(DESTDIR)/usr/bin/gpgui; \
 		fi; \
 		install -Dm644 apps/gpwidget/assets/waybar/gpwidget-module.jsonc $(DESTDIR)/usr/share/gpwidget/examples/waybar/gpwidget-module.jsonc; \
 		install -Dm644 apps/gpwidget/assets/waybar/style.css $(DESTDIR)/usr/share/gpwidget/examples/waybar/style.css; \
