@@ -29,7 +29,8 @@ optdepends=(
   'gnome-keyring: store portal credentials'
 )
 
-provides=('gpclient' 'gpservice' 'gpauth' 'gpgui' 'gpwidget')
+provides=('globalprotect-openconnect' 'gpclient' 'gpservice' 'gpauth' 'gpgui' 'gpwidget')
+install=gp.install
 
 source=("${_pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')

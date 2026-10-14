@@ -1,4 +1,4 @@
 #!/bin/sh
-# gpservice launches this path. Exec the real binary so a later GUI
-# download replaces the wrapper and leaves /usr/bin/gpwidget in place.
-exec /usr/bin/gpwidget "$@"
+# `gpclient launch-gui` runs the gpgui next to it as the desktop GUI. Exec the
+# sibling gpwidget so a regular file, not a symlink, occupies the gpgui path.
+exec "$(dirname "$0")/gpwidget" "$@"

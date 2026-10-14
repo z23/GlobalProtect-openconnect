@@ -1,5 +1,84 @@
 # Changelog
 
+## 3.0.5
+
+### Added
+
+- Added adaptive macOS app icons for light and dark appearances.
+
+### Fixed
+
+- Fixed macOS browser sign-in by automatically selecting the installed callback handler.
+- Improved app icon proportions in Finder and across the app, installer, and website.
+
+## 3.0.4
+
+### Added
+
+- Added `gpclient connect --background` with connection logs and graceful disconnect.
+
+### Fixed
+
+- Improved macOS service startup, relaunch, and quit responsiveness.
+- Updated app icons for clearer artwork across platforms.
+
+## 3.0.3
+
+### Fixed
+
+- Improved Wayland crash recovery on Linux and BSD.
+- Fixed pasted callbacks and prompts for remote browser sign-in.
+- Fixed legacy TLS configuration while preserving device identities.
+- Fixed diagnostics when optional tools are unavailable.
+- Fixed bundled macOS library paths and polished release notes in About.
+
+## 3.0.2
+
+### Added
+
+- Added `gpclient diagnostics` to collect system and client information for troubleshooting.
+
+### Fixed
+
+- Recognized WebKit Wayland rendering crashes now trigger one retry with DMABUF disabled when opening the GUI, first-time setup, or embedded browser sign-in.
+- Improved desktop rendering with opaque windows to reduce transparency-related flickering on Linux and BSD.
+- Browser sign-in retries refresh authentication data, and repeated failures report both attempts instead of leaving the client waiting.
+- Cancelling startup or sign-in now stops pending desktop child processes and version checks.
+
+## 3.0.1
+
+### Fixed
+
+- Fixed the bundled macOS CLI when launched through Homebrew.
+- Fixed browser sign-in failures leaving the CLI waiting without an error.
+- Fixed first-time startup on Linux and BSD when no system keyring is available.
+- Improved tray menu behavior on Linux and BSD.
+- Added clearer results when manually checking for updates.
+- Improved desktop dialogs, settings, keyboard focus, and Linux window controls.
+
+## 3.0.0
+
+### Added
+
+- GP Connect for Apple silicon Macs running macOS 13 or later.
+- Support for internal gateways that authenticate your device without creating a VPN tunnel.
+- More control over device compliance reports (HIP), including generated reports and custom scripts.
+- Desktop update notifications, with in-app updates on macOS and links to new releases on Linux and BSD.
+- JSON log output for CLI integrations and automation.
+
+### Changed
+
+- Refreshed the desktop connection view, gateway selection, and session details.
+- Improved browser sign-in, including opening your normal user's browser when the CLI runs with elevated privileges.
+- Improved session expiry warnings and session extension when allowed by your VPN administrator.
+- Updated license activation and recovery. Start the seven-day desktop trial by verifying your email address in the app.
+
+### Fixed
+
+- Improved cancellation, disconnect, and cached sign-in handling.
+- Improved desktop window and tray behavior across macOS, Linux, FreeBSD, and OpenBSD.
+- Improved package installation and desktop integration on Linux and BSD.
+
 ## 2.6.5
 
 ### Fixed
