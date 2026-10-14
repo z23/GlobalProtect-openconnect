@@ -7,7 +7,6 @@ use gpapi::{
 use crate::{
   config::Config,
   proto::{ConnStats, GatewayInfo, SessionSummary, StatusMsg, WidgetState},
-  ux::unix_now,
 };
 
 /// The daemon's view of the world, from which every socket snapshot is built.
@@ -51,7 +50,7 @@ impl Model {
       VpnState::Connecting(_) => WidgetState::Connecting,
       VpnState::Connected(_) => WidgetState::Connected,
       VpnState::Disconnecting => WidgetState::Disconnecting,
-      VpnState::Disconnected => {
+      VpnState::Disconnected | VpnState::Failed(_) => {
         if self.authenticating {
           WidgetState::Authenticating
         } else if self.last_error.is_some() {
@@ -66,6 +65,16 @@ impl Model {
   }
 
   pub fn apply_vpn_state(&mut self, vpn_state: VpnState) {
+    // gpservice ends a failed attempt in `Failed` rather than `Disconnected`.
+    // Keep only `Disconnected` in the model so idle checks stay one pattern.
+    let vpn_state = match vpn_state {
+      VpnState::Failed(reason) => {
+        self.last_error = Some(reason);
+        VpnState::Disconnected
+      }
+      vpn_state => vpn_state,
+    };
+
     // `portal` and `gateways` are private on upstream `ConnectInfo`. The
     // serialized state carries them; `session_info()` is already public.
     let wire = serde_json::to_value(&vpn_state).ok();
@@ -100,12 +109,12 @@ impl Model {
         // events (e.g. session extension re-broadcasts).
         if self.conn.is_none() {
           self.conn = Some(ConnStats {
-            since: unix_now(),
+            since: u64::from(connected.connected_at()),
             ..Default::default()
           });
         }
       }
-      VpnState::Disconnected => {
+      VpnState::Disconnected | VpnState::Failed(_) => {
         self.conn = None;
         self.session = None;
         self.current_gateway = None;
@@ -238,5 +247,20 @@ mod tests {
 
     model.last_error = None;
     assert_eq!(model.widget_state(), WidgetState::Disconnected);
+  }
+
+  #[test]
+  fn failed_attempt_is_disconnected_with_its_reason() {
+    let mut model = Model::new(Config::default());
+
+    model.apply_vpn_state(VpnState::Connected(Box::new(ConnectedInfo::new(connect_info(), None))));
+    model.apply_vpn_state(VpnState::Failed("tunnel failed".to_string()));
+
+    assert!(matches!(model.vpn_state, VpnState::Disconnected));
+    assert_eq!(model.last_error.as_deref(), Some("tunnel failed"));
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.state, Some(WidgetState::Error));
+    assert!(snapshot.conn.is_none());
   }
 }

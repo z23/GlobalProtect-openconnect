@@ -66,7 +66,7 @@ A GlobalProtect VPN client built on OpenConnect with support for SSO authenticat
 ```sh
 make build            # includes gpwidget (BUILD_WIDGET=1 by default)
 sudo make install     # installs /usr/bin/gpwidget, a gpgui wrapper, and assets
-gpclient launch-gui   # starts gpservice → gpwidget daemon
+gpclient launch-gui   # starts gpservice and the gpwidget daemon
 ```
 
 Optional autostart: enable the example user unit from
@@ -232,7 +232,7 @@ make build BUILD_GUI_HELPER=0
 sudo make install BUILD_GUI_HELPER=0
 ```
 
-If `rustup` is installed, `make build` honors `rust-toolchain.toml` (Rust 1.89). `make pkgbuild` deletes that pin and uses Arch `rust` (1.89+). After install, enable the Omarchy bar plugin and optional autostart as in [docs/widget.md](docs/widget.md).
+If `rustup` is installed, `make build` honors `rust-toolchain.toml` (Rust 1.91). `make pkgbuild` deletes that pin and uses Arch `rust` (1.91+). After install, enable the Omarchy bar plugin and optional autostart as in [docs/widget.md](docs/widget.md).
 
 ### Fedora 38+ / Rawhide
 

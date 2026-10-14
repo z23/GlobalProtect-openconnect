@@ -1,18 +1,23 @@
-use anyhow::bail;
+use std::io::Read;
+
+use anyhow::{bail, ensure};
 use clap::{Parser, Subcommand};
 use gpapi::{
   clap::InfoLevelVerbosity,
-  utils::{base64, env_utils},
+  service::transport::{MAX_CREDENTIAL_FRAME, SessionCredential},
+  utils::env_utils,
 };
 use log::info;
+use zeroize::Zeroizing;
 
 use crate::{client, config::Config, daemon, popup};
 
 // Shown by `gpwidget --version` when no gpservice binary can be queried.
-// GuiLauncher compares the second whitespace token with gpservice's
-// CARGO_PKG_VERSION and, on a mismatch, downloads the proprietary GUI over
-// the gpgui path. The running binary reports gpservice's own token instead
-// of this compile-time string. See `version_token`.
+// `gpclient launch-gui` compares the second whitespace token with its own
+// CARGO_PKG_VERSION (which must equal gpservice's) and, on a mismatch, falls
+// back to downloading the proprietary GUI. The running binary reports
+// gpservice's own token instead of this compile-time string. See
+// `version_token`.
 pub const VERSION: &str = concat!(
   env!("CARGO_PKG_VERSION"),
   " (",
@@ -22,18 +27,15 @@ pub const VERSION: &str = concat!(
   ")"
 );
 
-// The all-zeros key gpservice uses in debug `--no-gui` mode (gpapi only
-// exports it in debug builds; gpgui-helper keeps the same local copy).
-const GP_API_KEY: &[u8; 32] = &[0; 32];
-
 #[derive(Parser)]
 #[command(version = VERSION, about = "GlobalProtect VPN status widget for waybar and DMS")]
 struct Cli {
-  /// Read the WS api key from stdin (passed by gpservice when it launches the daemon)
+  /// Read the gpservice session credential from stdin (passed by
+  /// `gpclient launch-gui` when it launches the daemon)
   #[arg(long)]
-  api_key_on_stdin: bool,
+  service_credential_on_stdin: bool,
 
-  /// Accepted for gpservice compatibility; ignored
+  /// Accepted for `gpclient launch-gui` compatibility; ignored
   #[arg(long, hide = true)]
   minimized: bool,
 
@@ -74,19 +76,21 @@ enum Command {
   Quit,
 }
 
-impl Cli {
-  fn read_api_key(&self) -> anyhow::Result<Vec<u8>> {
-    if self.api_key_on_stdin {
-      let mut api_key = String::new();
-      std::io::stdin().read_line(&mut api_key)?;
+/// One length-prefixed credential frame, as `gpclient launch-gui` writes it.
+fn read_credential(input: &mut impl Read) -> anyhow::Result<SessionCredential> {
+  let mut header = [0; 2];
+  input.read_exact(&mut header)?;
+  let length = usize::from(u16::from_be_bytes(header));
+  ensure!(
+    length != 0 && length + 2 <= MAX_CREDENTIAL_FRAME,
+    "Invalid service credential length"
+  );
 
-      Ok(base64::decode_to_vec(api_key.trim())?)
-    } else {
-      // Matches gpservice's debug-only `--no-gui` key so the daemon can be
-      // developed against it without the full launch chain.
-      Ok(GP_API_KEY.to_vec())
-    }
-  }
+  let mut frame = Zeroizing::new(vec![0; length + 2]);
+  frame[..2].copy_from_slice(&header);
+  input.read_exact(&mut frame[2..])?;
+
+  Ok(SessionCredential::decode_frame(&frame)?)
 }
 
 fn init_logger(cli: &Cli) {
@@ -172,9 +176,9 @@ fn run_async(cli: Cli) -> anyhow::Result<()> {
   runtime.block_on(async {
     match cli.command {
       None => {
-        if !cli.api_key_on_stdin && !cfg!(debug_assertions) {
+        if !cli.service_credential_on_stdin {
           bail!(
-            "gpwidget's daemon mode is launched by gpservice (via `gpclient launch-gui`), not directly.\n\
+            "gpwidget's daemon mode is launched by `gpclient launch-gui`, not directly.\n\
              Use `gpwidget connect` to bring the VPN stack up, or `gpwidget status` to inspect it."
           );
         }
@@ -182,9 +186,9 @@ fn run_async(cli: Cli) -> anyhow::Result<()> {
         info!("gpwidget daemon started: {}", VERSION);
         env_utils::patch_gui_runtime_env(false);
 
-        let api_key = cli.read_api_key()?;
+        let credential = read_credential(&mut std::io::stdin().lock())?;
         let config = Config::load()?;
-        let exit_code = daemon::run(api_key, config).await?;
+        let exit_code = daemon::run(credential, config).await?;
 
         std::process::exit(exit_code);
       }
@@ -208,6 +212,20 @@ mod tests {
       version_token_from_stdout("gpservice 2.6.5 (abc1234 2026-08-05)"),
       Some("2.6.5")
     );
+  }
+
+  #[test]
+  fn reads_exactly_one_credential_frame() {
+    let credential = SessionCredential::generate(uuid::Uuid::new_v4(), "3.0.5").unwrap();
+    let mut input = credential.encode_frame().unwrap().to_vec();
+    input.extend_from_slice(b"trailing");
+
+    let decoded = read_credential(&mut input.as_slice()).unwrap();
+    assert_eq!(decoded.session_id(), credential.session_id());
+    assert_eq!(decoded.secret(), credential.secret());
+
+    assert!(read_credential(&mut &[0, 0][..]).is_err());
+    assert!(read_credential(&mut &[0, 9, b'{'][..]).is_err());
   }
 
   #[test]

@@ -42,7 +42,7 @@ build() {
 
   # Arch CFLAGS break the bundled OpenConnect/OpenSSL link
   unset CFLAGS
-  # Use distro rust (1.89+) rather than rust-toolchain.toml's rustup pin
+  # Use distro rust (1.91+) rather than rust-toolchain.toml's rustup pin
   make build BUILD_GUI_HELPER=0 DISABLE_RUST_TOOLCHAIN=1
 }
 

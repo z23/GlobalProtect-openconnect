@@ -21,7 +21,7 @@ pub struct Config {
   pub hidpi: bool,
   pub notifications: bool,
   pub auto_connect: bool,
-  /// Re-send the cached connect request on ResumeConnection (suspend/resume).
+  /// Reconnect the last gateway on ResumeConnection (suspend/resume).
   pub auto_resume: bool,
   pub stats_interval_secs: u64,
   pub waybar: WaybarConfig,

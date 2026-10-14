@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use gpapi::service::{
   event::WsEvent,
-  request::{ConnectRequest, DisconnectRequest, WsRequest},
+  request::{DisconnectRequest, WsRequest},
+  transport::SessionCredential,
   vpn_state::VpnState,
 };
 use log::{info, warn};
@@ -35,7 +36,7 @@ use ws_client::{WsClient, WsNotice};
 const CONNECT_WATCHDOG_SECS: u64 = 15;
 const QUIT_DISCONNECT_TIMEOUT_SECS: u64 = 10;
 
-pub async fn run(api_key: Vec<u8>, config: Config) -> anyhow::Result<i32> {
+pub async fn run(credential: SessionCredential, config: Config) -> anyhow::Result<i32> {
   // Must happen before the first TLS use in this process; the temp file
   // backing OPENSSL_CONF has to outlive every TLS call.
   let openssl_conf = if config.advanced.fix_openssl {
@@ -60,7 +61,7 @@ pub async fn run(api_key: Vec<u8>, config: Config) -> anyhow::Result<i32> {
 
   let socket_server = SocketServer::bind(&proto::socket_path(), hello_line, broadcast_tx.clone(), snapshot_rx).await?;
 
-  let ws = ws_client::spawn(api_key);
+  let ws = ws_client::spawn(credential);
   let (flow_tx, flow_rx) = mpsc::channel(16);
   let (timer_tx, timer_rx) = mpsc::channel(8);
   let (stats_tx, stats_rx) = mpsc::channel(8);
@@ -81,7 +82,7 @@ pub async fn run(api_key: Vec<u8>, config: Config) -> anyhow::Result<i32> {
     notifier,
     connect_cancel: None,
     pending_otp: None,
-    cached_request: None,
+    resume_gateway: None,
     disconnect_requested: false,
     quitting: false,
     watchdog_generation: 0,
@@ -120,9 +121,9 @@ struct Daemon {
   /// Cancellation handle of the running connect flow, if any.
   connect_cancel: Option<CancellationToken>,
   pending_otp: Option<oneshot::Sender<String>>,
-  /// Last successfully-submitted connect request; replayed on
-  /// ResumeConnection without re-running auth.
-  cached_request: Option<Box<ConnectRequest>>,
+  /// Gateway of the last submitted connect, reconnected on
+  /// ResumeConnection.
+  resume_gateway: Option<String>,
   /// True when the upcoming Disconnected state was asked for (disconnect
   /// command or quit), as opposed to an unexpected drop.
   disconnect_requested: bool,
@@ -161,6 +162,7 @@ impl Daemon {
                 return 0;
               }
             }
+            Some(WsNotice::Rejected(message)) => self.handle_rejection(message),
             Some(WsNotice::Lost) => {
               warn!("Lost connection to gpservice, attempting to reconnect");
             }
@@ -258,19 +260,25 @@ impl Daemon {
             self.model.last_error = None;
             self.watchdog_generation += 1;
           }
-          VpnState::Disconnected => {
+          VpnState::Disconnected | VpnState::Failed(_) => {
             if self.quitting {
               info!("Disconnected during quit, exiting");
               return true;
             }
 
-            if matches!(self.model.vpn_state, VpnState::Connected(_) | VpnState::Disconnecting) {
-              if self.disconnect_requested {
+            let failure = match &vpn_state {
+              VpnState::Failed(reason) => Some(reason.as_str()),
+              _ => None,
+            };
+
+            if self.disconnect_requested {
+              if matches!(self.model.vpn_state, VpnState::Connected(_) | VpnState::Disconnecting) {
                 self.notifier.low("GlobalProtect disconnected", "");
-              } else if matches!(self.model.vpn_state, VpnState::Connected(_)) {
-                self.toast(ToastLevel::Error, "GlobalProtect", "VPN connection lost");
-                self.notifier.critical("GlobalProtect", "VPN connection lost");
               }
+            } else if failure.is_some() || matches!(self.model.vpn_state, VpnState::Connected(_)) {
+              let message = failure.unwrap_or("VPN connection lost");
+              self.toast(ToastLevel::Error, "GlobalProtect", message);
+              self.notifier.critical("GlobalProtect", message);
             }
             self.disconnect_requested = false;
           }
@@ -407,10 +415,10 @@ impl Daemon {
 
       FlowMsg::Submitted { request } => {
         self.connect_cancel = None;
-        self.cached_request = Some(request);
+        self.resume_gateway = Some(request.info().gateway().name().to_string());
 
-        // gpservice silently ignores Connect when not Disconnected; make
-        // sure a stuck request surfaces instead of spinning forever.
+        // A rejected Connect arrives as WsNotice::Rejected, but a request it
+        // never acts on must still surface instead of spinning forever.
         self.watchdog_generation += 1;
         let generation = self.watchdog_generation;
         let timer_tx = self.timer_tx.clone();
@@ -434,6 +442,16 @@ impl Daemon {
         self.publish_snapshot();
       }
     }
+  }
+
+  /// gpservice refused a request (a connect it will not start, typically).
+  fn handle_rejection(&mut self, message: String) {
+    self.watchdog_generation += 1;
+    self.model.authenticating = false;
+    self.toast(ToastLevel::Error, "GlobalProtect", &message);
+    self.notifier.critical("GlobalProtect", &message);
+    self.model.last_error = Some(message);
+    self.publish_snapshot();
   }
 
   /// Schedule the session-expiry warning and surface any admin message.
@@ -585,19 +603,18 @@ impl Daemon {
       return;
     }
 
-    let Some(request) = self.cached_request.clone() else {
-      info!("No cached connect request to resume");
+    let Some(gateway) = self.resume_gateway.clone() else {
+      info!("No previous connection to resume");
       return;
     };
 
-    info!("Resuming the VPN connection with the cached request");
+    // gpservice logs the gateway session out whenever a tunnel ends, so the
+    // previous cookie cannot be replayed; authenticate again instead.
+    info!("Resuming the VPN connection to {}", gateway);
 
-    let ws_tx = self.ws.requests.clone();
-    tokio::spawn(async move {
-      if ws_tx.send(WsRequest::Connect(request)).await.is_err() {
-        warn!("Failed to send the resume connect request");
-      }
-    });
+    if let Err(err) = self.start_connect_flow(None, Some(gateway)) {
+      warn!("Failed to resume the VPN connection: {:#}", err);
+    }
   }
 
   async fn send_ws(&self, request: WsRequest) {

@@ -10,8 +10,9 @@ use std::fmt;
 use anyhow::{Context, bail};
 use gpapi::{
   credential::Credential,
-  gateway::{Gateway, GatewayLogin, GatewayLoginContext, GatewaySelection, gateway_login_with_context},
+  gateway::{Gateway, GatewayLogin, GatewayLoginClient, GatewayLoginContext, GatewaySelection},
   gp_params::GpParams,
+  hip::HipSource,
   os_profile::{OsProfile, runtime_client_os},
   portal::{Prelogin, PreloginOptions, SamlPrelogin, prelogin, retrieve_config},
   process::auth_launcher::SamlAuthLauncher,
@@ -20,6 +21,7 @@ use gpapi::{
     vpn_env::VpnEnv,
     vpn_state::ConnectInfo,
   },
+  session::{AuthenticatedGateway, ConnectionPlan, GatewayAuthentication, InternalSessionPolicy, SessionMode},
 };
 use log::{info, warn};
 use tokio::sync::{mpsc, oneshot};
@@ -52,7 +54,7 @@ pub enum FlowMsg {
     message: String,
     respond: oneshot::Sender<String>,
   },
-  /// The ConnectRequest was handed to gpservice; cache it for resume.
+  /// The ConnectRequest was handed to gpservice; its gateway is reused on resume.
   Submitted { request: Box<ConnectRequest> },
   Failed {
     error: String,
@@ -123,7 +125,7 @@ async fn run(ctx: &FlowCtx) -> anyhow::Result<Box<ConnectRequest>> {
   let cred = obtain_credential(ctx, &portal_prelogin, portal, false, &os_profile).await?;
 
   // 3. Portal config → gateways.
-  let mut portal_config = cancellable(&ctx.cancel, retrieve_config(portal, &cred, &gp_params))
+  let mut portal_config = cancellable(&ctx.cancel, retrieve_config(portal, &cred, &gp_params, &ctx.cancel))
     .await
     .context("Failed to retrieve the portal config")?;
 
@@ -161,7 +163,7 @@ async fn run(ctx: &FlowCtx) -> anyhow::Result<Box<ConnectRequest>> {
   let gateway_browser_allowed = portal_default_browser || external_browser;
   let context = GatewayLoginContext::new(&selected_gateway, selection).with_connect_method(portal_config.connect_method());
 
-  let cookie = gateway_login_with_fallback(
+  let authentication = gateway_login_with_fallback(
     ctx,
     &selected_gateway,
     &auth_cookie.can_authenticate_gateway().then(|| (&auth_cookie).into()),
@@ -172,19 +174,40 @@ async fn run(ctx: &FlowCtx) -> anyhow::Result<Box<ConnectRequest>> {
   )
   .await?;
 
-  // 6. Hand the finished cookie to gpservice.
+  // Non-tunnel sessions need the physical-network binding and internal host
+  // detection that only gpclient implements.
+  if authentication.mode() != SessionMode::Tunnel {
+    bail!(
+      "Gateway {} issued a non-tunnel session, which gpwidget does not support yet — use `gpclient connect` instead",
+      selected_gateway
+    );
+  }
+
+  // 6. Hand the authenticated gateway to gpservice.
+  let plan = ConnectionPlan::new(
+    vec![AuthenticatedGateway {
+      gateway: selected_gateway.clone(),
+      authentication,
+      binding: None,
+    }],
+    vec![],
+    InternalSessionPolicy::default(),
+  )?;
   let gateways: Vec<Gateway> = portal_config.gateways().into_iter().cloned().collect();
   let info = ConnectInfo::new(portal.to_string(), selected_gateway, gateways);
 
   let advanced = &config.advanced;
-  let csd_wrapper = advanced.hip.then(|| ctx.vpn_env.csd_wrapper.clone()).flatten();
+  let hip_source = if advanced.hip {
+    HipSource::Generated
+  } else {
+    HipSource::Disabled
+  };
 
-  let request = ConnectRequest::new(info, cookie)
+  let request = ConnectRequest::new(info, plan)
     .with_os_profile(&os_profile)
     .with_vpnc_script(ctx.vpn_env.vpnc_script.clone())
-    .with_hip(advanced.hip)
-    .with_csd_wrapper(csd_wrapper)
-    .with_csd_uid(uzers::get_current_uid())
+    .with_hip_source(hip_source)
+    .with_ignore_tls_errors(advanced.ignore_tls_errors)
     .with_allow_extend_session(allow_extend_session)
     .with_certificate(advanced.certificate.clone())
     .with_sslkey(advanced.sslkey.clone())
@@ -319,12 +342,12 @@ async fn gateway_login_with_fallback(
   context: &GatewayLoginContext,
   gateway_browser_allowed: bool,
   os_profile: &OsProfile,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<GatewayAuthentication> {
   if let Some(portal_cred) = portal_cred {
     match login_gateway(ctx, gateway.server(), portal_cred, gw_params, context).await {
-      Ok(cookie) => {
+      Ok(authentication) => {
         info!("Gateway login with portal auth cookies succeeded");
-        return Ok(cookie);
+        return Ok(authentication);
       }
       Err(err) if is_cancelled(&err) => return Err(err),
       Err(err) => {
@@ -363,24 +386,25 @@ async fn login_gateway(
   cred: &Credential,
   gw_params: &GpParams,
   context: &GatewayLoginContext,
-) -> anyhow::Result<String> {
-  let mut gw_params = gw_params.clone();
+) -> anyhow::Result<GatewayAuthentication> {
+  let mut client = GatewayLoginClient::new(gateway, gw_params.clone())?;
 
   loop {
-    let login = cancellable(
-      &ctx.cancel,
-      gateway_login_with_context(gateway, cred, &gw_params, context),
-    )
-    .await?;
+    let login = client.login(cred, Some(context), &ctx.cancel).await.map_err(|err| {
+      if ctx.cancel.is_cancelled() {
+        anyhow::Error::new(Cancelled)
+      } else {
+        err
+      }
+    })?;
 
     match login {
-      GatewayLogin::Cookie(cookie) => return Ok(cookie),
+      GatewayLogin::Authenticated(authentication) => return Ok(authentication),
       GatewayLogin::Mfa(message, input_str) => {
         info!("Gateway login requires MFA: {}", message);
 
         let otp = request_otp(ctx, &message).await?;
-        gw_params.set_input_str(&input_str);
-        gw_params.set_otp(&otp);
+        client.respond_mfa(&input_str, &otp);
 
         info!("Retrying gateway login with MFA...");
       }

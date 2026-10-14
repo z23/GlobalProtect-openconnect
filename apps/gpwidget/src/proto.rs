@@ -4,7 +4,7 @@
 //! the waybar module, the GTK popup and the DMS plugin (which mirrors these
 //! shapes in QML/JS). One JSON object per line, both directions.
 //!
-//! Security: status only — cookies, the api-key and SAML data never cross
+//! Security: status only — cookies, the session credential and SAML data never cross
 //! this socket.
 
 use std::path::PathBuf;

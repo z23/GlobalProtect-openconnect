@@ -1,26 +1,39 @@
 use std::io::ErrorKind;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use futures_util::{SinkExt, StreamExt};
 use gpapi::{
-  service::{event::WsEvent, request::WsRequest},
-  utils::{
-    crypto::Crypto,
-    lock_file::{LockFileError, LockInfo, gpservice_lock_info},
+  service::{
+    event::WsEvent,
+    request::WsRequest,
+    transport::{
+      ClientMessage, ClientPrelude, HIP_PROTOCOL_VERSION, NoiseInitiator, NoiseTransport, ServerMessage,
+      ServerPrelude, ServiceResult, SessionCredential,
+    },
+    vpn_env::VpnEnv,
   },
+  utils::lock_file::{LockFileError, LockInfo, gpservice_lock_info},
 };
-use log::{info, warn};
-use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use log::{debug, info, warn};
+use tokio::{net::TcpStream, sync::mpsc};
+use tokio_tungstenite::{
+  MaybeTlsStream, WebSocketStream, connect_async,
+  tungstenite::{Message, protocol::CloseFrame},
+};
+use uuid::Uuid;
+
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// What the WS task reports up to the daemon core.
 pub enum WsNotice {
   Event(WsEvent),
+  /// gpservice refused a request; carries its reason.
+  Rejected(String),
   /// Connection dropped; reconnection attempts are underway.
   Lost,
   /// gpservice is confirmed gone (or unreachable past the backoff budget).
-  /// The daemon should shut down: the api-key is per-launch, so a *new*
+  /// The daemon should shut down: the credential is per-launch, so a *new*
   /// gpservice can never be rejoined by this process.
   Gone,
 }
@@ -32,11 +45,11 @@ pub struct WsClient {
 
 const RECONNECT_DELAYS_MS: [u64; 6] = [500, 1000, 2000, 4000, 5000, 5000];
 
-pub fn spawn(api_key: Vec<u8>) -> WsClient {
+pub fn spawn(credential: SessionCredential) -> WsClient {
   let (notice_tx, notice_rx) = mpsc::channel(64);
   let (req_tx, req_rx) = mpsc::channel::<WsRequest>(16);
 
-  tokio::spawn(run(api_key, notice_tx, req_rx));
+  tokio::spawn(run(credential, notice_tx, req_rx));
 
   WsClient {
     notices: notice_rx,
@@ -45,128 +58,345 @@ pub fn spawn(api_key: Vec<u8>) -> WsClient {
 }
 
 const STARTUP_GRACE_SECS: u64 = 15;
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
+// Abandoning a handshake on a not-yet-activated credential makes gpservice
+// discard it, so allow the service's own 5s handshake budget.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Port discovered for this process. A later gpservice has a new api-key, so
-/// this process never looks the port up again after the first success.
+/// gpservice will never accept this credential again (revoked, superseded,
+/// or a restarted service), so reconnecting is pointless.
+#[derive(Debug)]
+struct Revoked(String);
+
+impl std::fmt::Display for Revoked {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "gpservice ended the session: {}", self.0)
+  }
+}
+
+impl std::error::Error for Revoked {}
+
+fn is_revoked(err: &anyhow::Error) -> bool {
+  err.downcast_ref::<Revoked>().is_some()
+}
+
+/// Port discovered for this process. A later gpservice issues a new
+/// credential, so this process never looks the port up again after the
+/// first success.
 struct Endpoint {
   port: Option<u16>,
   announced_probe: bool,
 }
 
-async fn run(api_key: Vec<u8>, notice_tx: mpsc::Sender<WsNotice>, mut req_rx: mpsc::Receiver<WsRequest>) {
-  let crypto = Crypto::new(api_key);
+/// An authenticated, attached session ready to relay messages.
+struct Session {
+  socket: Socket,
+  noise: NoiseTransport,
+  revision: u64,
+  snapshot: VpnEnv,
+}
+
+async fn run(credential: SessionCredential, notice_tx: mpsc::Sender<WsNotice>, mut req_rx: mpsc::Receiver<WsRequest>) {
   let mut endpoint = Endpoint {
     port: None,
     announced_probe: false,
   };
 
-  // gpservice launches this daemon concurrently with binding its WS server,
-  // so the lock file may not exist yet — wait for it instead of declaring
-  // the service gone at birth.
+  // The credential must be activated within gpservice's activation window,
+  // and the lock file can lag the launch, so retry briefly instead of
+  // declaring the service gone at birth.
   let deadline = tokio::time::Instant::now() + Duration::from_secs(STARTUP_GRACE_SECS);
-  while !service_alive(&mut endpoint).await {
-    if tokio::time::Instant::now() >= deadline {
-      warn!("gpservice did not come up within {}s", STARTUP_GRACE_SECS);
-      let _ = notice_tx.send(WsNotice::Gone).await;
-      return;
+  let mut session = loop {
+    match open(&credential, &mut endpoint, None).await {
+      Ok(session) => break session,
+      Err(err) if is_revoked(&err) => {
+        warn!("{:#}", err);
+        let _ = notice_tx.send(WsNotice::Gone).await;
+        return;
+      }
+      Err(err) => {
+        if tokio::time::Instant::now() >= deadline {
+          warn!("gpservice did not come up within {}s: {:#}", STARTUP_GRACE_SECS, err);
+          let _ = notice_tx.send(WsNotice::Gone).await;
+          return;
+        }
+        debug!("gpservice is not reachable yet: {:#}", err);
+      }
     }
 
     tokio::time::sleep(Duration::from_millis(500)).await;
-  }
+  };
 
   loop {
-    match pump(&crypto, &notice_tx, &mut req_rx, &mut endpoint).await {
+    let mut revision = session.revision;
+
+    match pump(session, &mut revision, &notice_tx, &mut req_rx).await {
       Ok(()) => info!("WS connection closed by gpservice"),
-      Err(err) => warn!("WS connection error: {}", err),
+      Err(err) if is_revoked(&err) => {
+        warn!("{:#}", err);
+        let _ = notice_tx.send(WsNotice::Gone).await;
+        return;
+      }
+      Err(err) => warn!("WS connection error: {:#}", err),
     }
 
     if notice_tx.send(WsNotice::Lost).await.is_err() {
       return;
     }
 
-    let mut reconnected = false;
+    let mut reconnected = None;
     for delay_ms in RECONNECT_DELAYS_MS {
       tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
-      if !service_alive(&mut endpoint).await {
+      if let Some(port) = endpoint.port
+        && !health_ok(port).await
+      {
         info!("gpservice is gone, stopping reconnection attempts");
         break;
       }
 
-      // Service is alive; the drop was transient. Next pump() will redial.
-      reconnected = true;
-      break;
+      match open(&credential, &mut endpoint, Some(revision)).await {
+        Ok(session) => {
+          reconnected = Some(session);
+          break;
+        }
+        Err(err) if is_revoked(&err) => {
+          warn!("{:#}", err);
+          break;
+        }
+        Err(err) => info!("Reconnect attempt failed: {:#}", err),
+      }
     }
 
-    if !reconnected {
+    let Some(next) = reconnected else {
       let _ = notice_tx.send(WsNotice::Gone).await;
       return;
-    }
+    };
+    session = next;
   }
 }
 
-/// One WS session: dial, then relay events out and requests in until the
-/// connection dies.
+/// One WS session: relay events out and requests in until the connection
+/// dies. `revision` tracks the last event seen, for the next attach.
 async fn pump(
-  crypto: &Crypto,
+  session: Session,
+  revision: &mut u64,
   notice_tx: &mpsc::Sender<WsNotice>,
   req_rx: &mut mpsc::Receiver<WsRequest>,
-  endpoint: &mut Endpoint,
 ) -> anyhow::Result<()> {
-  let port = discover_port(endpoint)
-    .await
-    .context("Failed to discover gpservice endpoint")?;
-  let url = format!("ws://127.0.0.1:{port}/ws");
-  let (stream, _) = connect_async(&url).await.context("Failed to connect to gpservice WS")?;
+  let Session {
+    socket,
+    mut noise,
+    snapshot,
+    ..
+  } = session;
 
-  info!("Connected to gpservice at {}", url);
+  if notice_tx.send(WsNotice::Event(WsEvent::VpnEnv(snapshot))).await.is_err() {
+    return Ok(());
+  }
 
-  let (mut sink, mut source) = stream.split();
+  let (mut sink, mut source) = socket.split();
 
   loop {
     tokio::select! {
-      msg = source.next() => {
-        let Some(msg) = msg else {
+      frame = source.next() => {
+        let Some(frame) = frame else {
           return Ok(());
         };
 
-        match msg? {
+        match frame? {
           Message::Binary(payload) => {
-            let event: WsEvent = crypto
-              .decrypt(payload.to_vec())
-              .context("Failed to decrypt WS event (api-key mismatch?)")?;
+            let message: ServerMessage = noise
+              .decrypt(&payload)
+              .context("Failed to authenticate a gpservice message")?;
 
-            if notice_tx.send(WsNotice::Event(event)).await.is_err() {
+            let notice = match message {
+              ServerMessage::Event { revision: next, event } => {
+                if next != revision.wrapping_add(1) {
+                  warn!("Missed gpservice events ({} -> {}), requesting a snapshot", revision, next);
+                  let resync = noise.encrypt(&ClientMessage::Resync { last_event_revision: *revision })?;
+                  sink.send(Message::Binary(resync.into())).await?;
+                }
+                *revision = next;
+                WsNotice::Event(event)
+              }
+              ServerMessage::Snapshot { current_revision, snapshot } => {
+                *revision = current_revision;
+                WsNotice::Event(WsEvent::VpnState(snapshot.vpn_state))
+              }
+              ServerMessage::Reply { result: ServiceResult::Rejected(rejection), .. } => {
+                warn!("gpservice rejected a request ({:?}): {}", rejection.code(), rejection.message());
+                WsNotice::Rejected(rejection.message().to_owned())
+              }
+              ServerMessage::Reply { .. } => continue,
+              ServerMessage::Attached { .. } => bail!("gpservice attached an already attached session"),
+            };
+
+            if notice_tx.send(notice).await.is_err() {
               return Ok(());
             }
           }
-          // gpservice sends an initial Ping and waits for any reply frame
-          // before registering the client; answer explicitly instead of
-          // relying on split-stream auto-pong flushing.
+          // gpservice pings on idle and closes without a pong; answer
+          // explicitly instead of relying on split-stream auto-pong flushing.
           Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
-          Message::Close(_) => return Ok(()),
+          Message::Close(frame) => return closed(frame),
           _ => {}
         }
       }
 
       req = req_rx.recv() => {
-        let Some(req) = req else {
+        let Some(request) = req else {
           return Ok(());
         };
 
-        let payload = crypto.encrypt(&req).context("Failed to encrypt WS request")?;
+        let message = ClientMessage::Request { id: Uuid::new_v4(), request };
+        let payload = noise.encrypt(&message).context("Failed to encrypt WS request")?;
         sink.send(Message::Binary(payload.into())).await?;
       }
     }
   }
 }
 
-async fn service_alive(endpoint: &mut Endpoint) -> bool {
-  let Some(port) = discover_port(endpoint).await else {
-    return false;
-  };
+/// gpservice's application close codes that mean the credential is dead:
+/// VersionMismatch, Unauthorized, SessionReplaced, ServiceRestarted.
+const FINAL_CLOSE_CODES: [u16; 4] = [4001, 4002, 4003, 4011];
 
-  health_ok(port).await
+fn closed(frame: Option<CloseFrame>) -> anyhow::Result<()> {
+  match frame {
+    Some(frame) if FINAL_CLOSE_CODES.contains(&u16::from(frame.code)) => Err(Revoked(frame.reason.to_string()).into()),
+    Some(frame) => bail!("gpservice closed the connection: {}", frame.reason),
+    None => Ok(()),
+  }
+}
+
+/// Dial and authenticate, discovering the port on first use.
+async fn open(
+  credential: &SessionCredential,
+  endpoint: &mut Endpoint,
+  last_revision: Option<u64>,
+) -> anyhow::Result<Session> {
+  if let Some(port) = endpoint.port {
+    return establish(port, credential, last_revision).await;
+  }
+
+  match classify_lock(gpservice_lock_info().await) {
+    LockView::Port(port) => {
+      let session = establish(port, credential, last_revision).await?;
+      endpoint.port = Some(port);
+      Ok(session)
+    }
+    LockView::Missing => bail!("gpservice has not published its port yet"),
+    LockView::Unreadable => {
+      if !endpoint.announced_probe {
+        info!("gpservice lock file is not readable by this user; scanning localhost listeners");
+        endpoint.announced_probe = true;
+      }
+
+      let table = tokio::fs::read_to_string("/proc/net/tcp")
+        .await
+        .context("Failed to read /proc/net/tcp")?;
+      let (port, session) = probe(&localhost_root_listeners(&table), credential, last_revision).await?;
+      endpoint.port = Some(port);
+      Ok(session)
+    }
+  }
+}
+
+/// Only gpservice holds the credential's secret, so the first candidate that
+/// completes the handshake is gpservice. Any other listener just fails it.
+async fn probe(
+  ports: &[u16],
+  credential: &SessionCredential,
+  last_revision: Option<u64>,
+) -> anyhow::Result<(u16, Session)> {
+  for &port in ports {
+    match establish(port, credential, last_revision).await {
+      Ok(session) => return Ok((port, session)),
+      Err(err) => debug!("Listener {} is not this session's gpservice: {:#}", port, err),
+    }
+  }
+
+  bail!("No localhost listener accepted the gpservice handshake")
+}
+
+async fn establish(port: u16, credential: &SessionCredential, last_revision: Option<u64>) -> anyhow::Result<Session> {
+  let url = format!("ws://127.0.0.1:{port}/ws");
+  let (mut socket, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(&url))
+    .await
+    .context("Timed out connecting to gpservice WS")?
+    .context("Failed to connect to gpservice WS")?;
+
+  let (noise, revision, snapshot) = tokio::time::timeout(
+    HANDSHAKE_TIMEOUT,
+    handshake(&mut socket, credential, last_revision),
+  )
+  .await
+  .context("Timed out authenticating with gpservice")??;
+
+  info!("Connected to gpservice at {}", url);
+
+  Ok(Session {
+    socket,
+    noise,
+    revision,
+    snapshot,
+  })
+}
+
+/// Prelude, Noise NNpsk0 with the credential secret, then attach.
+async fn handshake(
+  socket: &mut Socket,
+  credential: &SessionCredential,
+  last_revision: Option<u64>,
+) -> anyhow::Result<(NoiseTransport, u64, VpnEnv)> {
+  let prelude = ClientPrelude {
+    product_version: credential.product_version().to_owned(),
+    hip_protocol_version: HIP_PROTOCOL_VERSION,
+    service_instance_id: credential.service_instance_id(),
+    session_id: credential.session_id(),
+  };
+  socket.send(Message::Binary(prelude.encode()?.into())).await?;
+
+  if let ServerPrelude::Rejected(rejection) = ServerPrelude::decode(&recv_binary(socket).await?)? {
+    return Err(Revoked(format!("{rejection:?}")).into());
+  }
+
+  let mut initiator = NoiseInitiator::new(
+    credential.product_version(),
+    credential.service_instance_id(),
+    credential.session_id(),
+    credential.secret(),
+  )?;
+  socket.send(Message::Binary(initiator.write_first()?.into())).await?;
+  let mut noise = initiator.read_response(&recv_binary(socket).await?)?;
+
+  let attach = noise.encrypt(&ClientMessage::Attach {
+    last_event_revision: last_revision,
+  })?;
+  socket.send(Message::Binary(attach.into())).await?;
+
+  match noise.decrypt(&recv_binary(socket).await?)? {
+    ServerMessage::Attached {
+      current_revision,
+      snapshot,
+      ..
+    } => Ok((noise, current_revision, snapshot)),
+    _ => bail!("gpservice did not attach the session"),
+  }
+}
+
+async fn recv_binary(socket: &mut Socket) -> anyhow::Result<Vec<u8>> {
+  loop {
+    match socket.next().await.context("gpservice closed the connection")?? {
+      Message::Binary(payload) => return Ok(payload.to_vec()),
+      Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
+      Message::Close(frame) => {
+        closed(frame)?;
+        bail!("gpservice closed the connection during the handshake");
+      }
+      _ => bail!("Unexpected frame during the gpservice handshake"),
+    }
+  }
 }
 
 /// Where the lock file left us. `Missing` means gpservice has not published a
@@ -189,32 +419,6 @@ fn classify_lock(result: Result<LockInfo, LockFileError>) -> LockView {
     Err(LockFileError::IoError(err)) if err.kind() == ErrorKind::NotFound => LockView::Missing,
     Err(LockFileError::IoError(err)) if err.kind() == ErrorKind::PermissionDenied => LockView::Unreadable,
     Err(_) => LockView::Missing,
-  }
-}
-
-async fn discover_port(endpoint: &mut Endpoint) -> Option<u16> {
-  if let Some(port) = endpoint.port {
-    return Some(port);
-  }
-
-  match classify_lock(gpservice_lock_info().await) {
-    LockView::Port(port) => {
-      endpoint.port = Some(port);
-      Some(port)
-    }
-    LockView::Missing => None,
-    LockView::Unreadable => {
-      if !endpoint.announced_probe {
-        info!("gpservice lock file is not readable by this user; scanning localhost listeners");
-        endpoint.announced_probe = true;
-      }
-
-      let table = tokio::fs::read_to_string("/proc/net/tcp").await.ok()?;
-      let ports = localhost_root_listeners(&table);
-      let port = first_gpservice_port(&ports).await?;
-      endpoint.port = Some(port);
-      Some(port)
-    }
   }
 }
 
@@ -261,36 +465,87 @@ fn localhost_root_listeners(table: &str) -> Vec<u16> {
   ports
 }
 
-/// gpservice's first frame is `Ping("Hi")`, sent before it reads. The probe
-/// must not write the api-key, or any other frame, to a candidate.
-async fn first_gpservice_port(ports: &[u16]) -> Option<u16> {
-  let checks = futures_util::future::join_all(ports.iter().copied().map(looks_like_gpservice)).await;
-
-  ports
-    .iter()
-    .copied()
-    .zip(checks)
-    .find(|(_, matched)| *matched)
-    .map(|(port, _)| port)
-}
-
-async fn looks_like_gpservice(port: u16) -> bool {
-  let url = format!("ws://127.0.0.1:{port}/ws");
-  let timeout = Duration::from_millis(400);
-
-  let Ok(Ok((mut stream, _))) = tokio::time::timeout(timeout, connect_async(&url)).await else {
-    return false;
-  };
-
-  match tokio::time::timeout(timeout, stream.next()).await {
-    Ok(Some(Ok(Message::Ping(payload)))) => payload.as_ref() == b"Hi",
-    _ => false,
-  }
-}
-
 #[cfg(test)]
 mod tests {
+  use gpapi::{
+    os_profile::HostIdentity,
+    service::{
+      request::DisconnectRequest,
+      transport::{HandshakeRejection, NoiseResponder, ServiceErrorCode},
+      vpn_env::HostInfo,
+      vpn_state::VpnState,
+    },
+  };
+  use tokio::net::TcpListener;
+
   use super::*;
+
+  const VERSION: &str = "test-version";
+
+  fn credential() -> SessionCredential {
+    SessionCredential::generate(Uuid::new_v4(), VERSION).unwrap()
+  }
+
+  fn snapshot() -> VpnEnv {
+    VpnEnv {
+      vpn_state: VpnState::Disconnected,
+      vpnc_script: None,
+      auth_executable: "/usr/bin/gpauth".into(),
+      host_info: HostInfo {
+        host_identity: HostIdentity::collect(),
+      },
+    }
+  }
+
+  async fn recv(ws: &mut WebSocketStream<TcpStream>) -> Vec<u8> {
+    match ws.next().await.unwrap().unwrap() {
+      Message::Binary(payload) => payload.to_vec(),
+      frame => panic!("unexpected frame: {frame:?}"),
+    }
+  }
+
+  /// gpservice's side of the handshake, built from the same gpapi types.
+  async fn accept(
+    listener: &TcpListener,
+    credential: &SessionCredential,
+  ) -> (WebSocketStream<TcpStream>, NoiseTransport, Option<u64>) {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+
+    let prelude = ClientPrelude::decode(&recv(&mut ws).await).unwrap();
+    assert_eq!(prelude.product_version, VERSION);
+    assert_eq!(prelude.hip_protocol_version, HIP_PROTOCOL_VERSION);
+    assert_eq!(prelude.service_instance_id, credential.service_instance_id());
+    assert_eq!(prelude.session_id, credential.session_id());
+    ws.send(Message::Binary(ServerPrelude::Ready.encode().unwrap().into()))
+      .await
+      .unwrap();
+
+    let mut responder = NoiseResponder::new(
+      VERSION,
+      credential.service_instance_id(),
+      credential.session_id(),
+      credential.secret(),
+    )
+    .unwrap();
+    responder.read_first(&recv(&mut ws).await).unwrap();
+    let (response, mut noise) = responder.write_response().unwrap();
+    ws.send(Message::Binary(response.into())).await.unwrap();
+
+    let ClientMessage::Attach { last_event_revision } = noise.decrypt(&recv(&mut ws).await).unwrap() else {
+      panic!("expected attach");
+    };
+    let attached = noise
+      .encrypt(&ServerMessage::Attached {
+        connection_id: Uuid::new_v4(),
+        current_revision: 7,
+        snapshot: snapshot(),
+      })
+      .unwrap();
+    ws.send(Message::Binary(attached.into())).await.unwrap();
+
+    (ws, noise, last_event_revision)
+  }
 
   #[test]
   fn tcp_table_keeps_root_loopback_listeners_only() {
@@ -316,42 +571,131 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn probe_picks_ping_hi_and_sends_no_frame() {
-    use std::sync::{
-      Arc,
-      atomic::{AtomicBool, Ordering},
-    };
+  async fn session_relays_snapshot_events_and_requests() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let credential = credential();
+    let server_credential = SessionCredential::decode_frame(&credential.encode_frame().unwrap()).unwrap();
 
-    use tokio::net::TcpListener;
+    let server = tokio::spawn(async move {
+      let (mut ws, mut noise, last_event_revision) = accept(&listener, &server_credential).await;
+      assert_eq!(last_event_revision, Some(3));
 
-    let ping = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let ping_port = ping.local_addr().unwrap().port();
-    let decoy_port = decoy.local_addr().unwrap().port();
-    let wrote = Arc::new(AtomicBool::new(false));
-    let wrote_probe = Arc::clone(&wrote);
+      let event = noise
+        .encrypt(&ServerMessage::Event {
+          revision: 8,
+          event: WsEvent::VpnState(VpnState::Disconnecting),
+        })
+        .unwrap();
+      ws.send(Message::Binary(event.into())).await.unwrap();
 
-    tokio::spawn(async move {
-      let (stream, _) = ping.accept().await.unwrap();
-      let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-      ws.send(Message::Ping(b"Hi".to_vec().into())).await.unwrap();
-
-      let next = tokio::time::timeout(Duration::from_millis(500), ws.next()).await;
-      if let Ok(Some(Ok(Message::Binary(_)))) = next {
-        wrote_probe.store(true, Ordering::SeqCst);
-      }
+      let ClientMessage::Request { id, request } = noise.decrypt(&recv(&mut ws).await).unwrap() else {
+        panic!("expected a request");
+      };
+      assert!(matches!(request, WsRequest::Disconnect(_)));
+      let reply = noise
+        .encrypt(&ServerMessage::Reply {
+          id,
+          result: ServiceResult::rejected(ServiceErrorCode::Busy, "busy"),
+        })
+        .unwrap();
+      ws.send(Message::Binary(reply.into())).await.unwrap();
+      ws
     });
 
+    let session = establish(port, &credential, Some(3)).await.unwrap();
+    assert_eq!(session.revision, 7);
+
+    let (notice_tx, mut notices) = mpsc::channel(8);
+    let (req_tx, mut req_rx) = mpsc::channel(8);
+    let pump = tokio::spawn(async move {
+      let mut revision = session.revision;
+      let result = pump(session, &mut revision, &notice_tx, &mut req_rx).await;
+      (result, revision)
+    });
+
+    assert!(matches!(notices.recv().await, Some(WsNotice::Event(WsEvent::VpnEnv(_)))));
+    assert!(matches!(
+      notices.recv().await,
+      Some(WsNotice::Event(WsEvent::VpnState(VpnState::Disconnecting)))
+    ));
+
+    req_tx.send(WsRequest::Disconnect(DisconnectRequest)).await.unwrap();
+    assert!(matches!(notices.recv().await, Some(WsNotice::Rejected(message)) if message == "busy"));
+
+    drop(server.await.unwrap());
+    let (_, revision) = pump.await.unwrap();
+    assert_eq!(revision, 8);
+  }
+
+  #[tokio::test]
+  async fn rejected_handshake_revokes_the_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+      let (stream, _) = listener.accept().await.unwrap();
+      let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+      let _ = recv(&mut ws).await;
+      let rejected = ServerPrelude::Rejected(HandshakeRejection::ServiceRestarted {
+        service_instance_id: Uuid::new_v4(),
+      });
+      ws.send(Message::Binary(rejected.encode().unwrap().into())).await.unwrap();
+    });
+
+    let err = establish(port, &credential(), None).await.err().unwrap();
+    assert!(is_revoked(&err));
+  }
+
+  #[tokio::test]
+  async fn probe_skips_listeners_that_cannot_authenticate() {
+    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let real = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let decoy_port = decoy.local_addr().unwrap().port();
+    let real_port = real.local_addr().unwrap().port();
+    let credential = credential();
+    let server_credential = SessionCredential::decode_frame(&credential.encode_frame().unwrap()).unwrap();
+
+    // A WS listener holding a different secret: the Noise handshake fails.
     tokio::spawn(async move {
       let (stream, _) = decoy.accept().await.unwrap();
       let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-      let _ = ws.send(Message::Text("nope".into())).await;
-      let _ = tokio::time::timeout(Duration::from_millis(500), ws.next()).await;
+      let prelude = ClientPrelude::decode(&recv(&mut ws).await).unwrap();
+      ws.send(Message::Binary(ServerPrelude::Ready.encode().unwrap().into()))
+        .await
+        .unwrap();
+      let mut responder = NoiseResponder::new(
+        VERSION,
+        prelude.service_instance_id,
+        prelude.session_id,
+        &[7; 32],
+      )
+      .unwrap();
+      let _ = responder.read_first(&recv(&mut ws).await);
+      let _ = ws.close(None).await;
     });
 
-    let found = first_gpservice_port(&[decoy_port, ping_port]).await;
+    let server = tokio::spawn(async move { accept(&real, &server_credential).await.0 });
 
-    assert_eq!(found, Some(ping_port));
-    assert!(!wrote.load(Ordering::SeqCst));
+    let (port, _session) = probe(&[decoy_port, real_port], &credential, None).await.unwrap();
+    assert_eq!(port, real_port);
+    drop(server.await.unwrap());
+  }
+
+  #[test]
+  fn final_close_codes_end_the_session() {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    let frame = |code: u16| {
+      Some(CloseFrame {
+        code: CloseCode::from(code),
+        reason: "reason".into(),
+      })
+    };
+
+    assert!(is_revoked(&closed(frame(4002)).unwrap_err()));
+    assert!(is_revoked(&closed(frame(4011)).unwrap_err()));
+    assert!(!is_revoked(&closed(frame(4012)).unwrap_err()));
+    assert!(closed(None).is_ok());
   }
 }
