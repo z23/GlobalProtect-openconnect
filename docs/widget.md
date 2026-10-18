@@ -212,7 +212,12 @@ between controls; Enter or Space activates; Left/Right or h/l switch to
 neighboring shell panels; R refreshes; Esc closes. Text inputs keep normal
 editing keys and use Enter to connect or submit the OTP. The gateway dropdown
 uses its own arrow/j/k navigation and Enter to select. Selecting a gateway
-while connected takes effect on the next connection.
+while connected takes effect on the next connection. The default, **Automatic**,
+uses the configured gateway pin or the portal's preferred gateway. Only an
+explicit dropdown choice overrides that behavior; the choice is cleared when
+the daemon disconnects, the portal changes, or that gateway is no longer listed.
+An incompatible daemon protocol leaves a visible error and pauses reconnects;
+use Refresh after updating the plugin or daemon to negotiate again.
 
 The GTK popup remains available through `gpwidget popup` for Waybar and other
 bars.

@@ -29,7 +29,7 @@ Panel {
   readonly property var sections: {
     var result = ["action"]
     if (showPortal) result.push("portal")
-    if (service && service.gatewayOptions.length > 1) result.push("gateway")
+    if (service && (service.gatewayOptions.length > 1 || service.selectedGateway !== "")) result.push("gateway")
     if (showOtp) result.push("otp", "submit")
     result.push("refresh")
     if (service && service.ready) result.push("quit")
@@ -262,9 +262,9 @@ Panel {
           Dropdown {
             id: gateway
             width: parent.width
-            visible: root.service && root.service.gatewayOptions.length > 1
+            visible: root.service && (root.service.gatewayOptions.length > 1 || root.service.selectedGateway !== "")
             label: root.service && root.service.connected ? "GATEWAY FOR NEXT CONNECTION" : "GATEWAY"
-            options: root.service ? root.service.gatewayOptions : []
+            options: [{ value: "", label: "Automatic" }].concat(root.service ? root.service.gatewayOptions : [])
             value: root.service ? root.service.selectedGateway : ""
             foreground: root.foreground
             enabled: root.service && !root.service.busy && !root.service.pending

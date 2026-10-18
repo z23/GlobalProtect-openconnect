@@ -18,6 +18,7 @@ Scope {
   property string otpMessage: ""
   property string selectedGateway: ""
   property bool protocolReady: false
+  property bool protocolMismatch: false
   property bool hasStatus: false
   property int sequence: 0
   property int pendingId: 0
@@ -60,24 +61,32 @@ Scope {
     hasStatus = false
     responseTimeout.stop()
     snapshot = { state: "stack-down" }
+    selectedGateway = ""
     otpMessage = ""
     if (pendingId !== 0) {
       failAction("VPN service disconnected before confirming the action")
       clearPending()
     }
-    if (active) retry.restart()
+    if (active && !protocolMismatch) retry.restart()
   }
 
   function connectSocket() {
-    if (!active || socket.connected) return
+    if (!active || protocolMismatch || socket.connected) return
     socket.connected = false
     socket.connected = true
   }
 
   function refresh() {
+    var retryProtocol = protocolMismatch
+    protocolMismatch = false
     transportError = ""
     retryDelay = 1000
-    if (socket.connected) {
+    if (retryProtocol) {
+      // A new connection must negotiate a fresh hello; get-status alone
+      // cannot recover from an incompatible daemon's protocol.
+      socket.connected = false
+      Qt.callLater(connectSocket)
+    } else if (socket.connected) {
       socket.write(JSON.stringify({ type: "get-status" }) + "\n")
       socket.flush()
       responseTimeout.restart()
@@ -99,9 +108,14 @@ Scope {
   }
 
   function connectVpn(portal) {
+    var requestedPortal = String(portal || "").trim()
+    // A gateway override is an explicit user choice for this portal only.
+    // Empty means the daemon applies its configured pin or automatic choice.
+    if ((requestedPortal !== "" && requestedPortal !== String(snapshot.portal || ""))
+        || !gatewayOptions.some(function(g) { return g.value === selectedGateway })) selectedGateway = ""
     var extra = {}
     if (selectedGateway !== "") extra.gateway = selectedGateway
-    if (String(portal || "").trim() !== "") extra.portal = String(portal).trim()
+    if (requestedPortal !== "") extra.portal = requestedPortal
     if (ready) return sendCommand("connect", extra)
     if (pending || linkUp || transportError !== "") return false
     actionError = ""
@@ -130,6 +144,7 @@ Scope {
   }
 
   function receive(line) {
+    if (protocolMismatch) return
     var message
     try { message = JSON.parse(line) }
     catch (e) { transportError = "Invalid response from VPN service"; return }
@@ -140,13 +155,23 @@ Scope {
     switch (message.type) {
     case "hello":
       protocolReady = message.protocol === 1
-      if (!protocolReady) transportError = "Unsupported VPN widget protocol · " + message.protocol
+      if (!protocolReady) {
+        protocolMismatch = true
+        hasStatus = false
+        transportError = "Unsupported VPN widget protocol · " + message.protocol
+        responseTimeout.stop()
+        retry.stop()
+        // Keep the actionable error until an explicit refresh. As with socket
+        // errors, wait until the read callback unwinds before closing.
+        Qt.callLater(function() { socket.connected = false })
+      }
       break
     case "status":
       if (!protocolReady) return
       if (!Model.validStatus(message)) { transportError = "Invalid VPN status response"; return }
       responseTimeout.stop()
       transportError = ""
+      if (String(message.portal || "") !== String(snapshot.portal || "")) selectedGateway = ""
       snapshot = message
       now = Math.floor(Date.now() / 1000)
       hasStatus = true
@@ -154,11 +179,7 @@ Scope {
       if (actionError !== "" && state !== actionErrorState) actionError = ""
       if (state !== "authenticating") otpMessage = ""
       var options = gatewayOptions
-      if (!options.some(function(g) { return g.value === selectedGateway })) {
-        var current = message.gateway ? message.gateway.address : ""
-        selectedGateway = options.some(function(g) { return g.value === current }) ? current
-          : options.length ? options[0].value : ""
-      }
+      if (!options.some(function(g) { return g.value === selectedGateway })) selectedGateway = ""
       break
     case "auth-prompt":
       if (protocolReady && message.kind === "otp") otpMessage = String(message.message || "Enter your one-time password")
@@ -192,7 +213,7 @@ Scope {
     onError: function(error) {
       // QLocalSocket::LocalSocketError: refused, peer closed, and not found
       // (0..2) mean the optional daemon is down. Other errors are actionable.
-      if (error > 2 || error < 0) root.transportError = error === 3
+      if (!root.protocolMismatch && (error > 2 || error < 0)) root.transportError = error === 3
         ? "Permission denied reading VPN socket" : "Cannot read VPN socket (error " + error + ")"
       // Quickshell may still be unwinding QLocalSocket's error callback.
       // Closing it synchronously here can delete the underlying socket twice.
@@ -221,6 +242,7 @@ Scope {
     id: responseTimeout
     interval: 5000
     onTriggered: {
+      if (root.protocolMismatch) return
       root.transportError = "VPN service stopped responding"
       socket.connected = false
     }

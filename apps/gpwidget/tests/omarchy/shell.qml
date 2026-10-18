@@ -10,17 +10,132 @@ ShellRoot {
   property var lastCommand: ({})
   property int step: 0
   property int checks: 0
+  property int gatewayStep: 0
+  property bool gatewayChecksComplete: false
+  property int protocol: 1
+  property int connections: 0
+  property int mismatchConnections: 0
+  property double mismatchSince: 0
   onStepChanged: console.log("Runtime step " + step)
   property var status: ({ type: "status", state: "disconnected", portal: "vpn.example",
     gateways: [{ name: "Australia", address: "au.example" }, { name: "Europe", address: "eu.example" }] })
 
   function check(value, label) {
-    if (!value) { console.error("FAIL at step " + step + ": " + label); Qt.quit() }
+    if (!value) {
+      console.error("FAIL: step " + step + ", gateway step " + gatewayStep + ": " + label)
+      Qt.quit()
+      throw new Error(label)
+    }
     checks++
   }
   function write(message) { client.write(JSON.stringify(message) + "\n"); client.flush() }
   function acknowledge(ok) { write({ type: "ack", id: lastCommand.id, ok: ok, error: ok ? null : "fixture rejection" }) }
   function setState(state) { status = Object.assign({}, status, { state: state }); write(status) }
+
+  // Exercise connects before any manual choice, then selection invalidation.
+  // The original harness picked a gateway before its first connect and could
+  // not detect an implicit pin being manufactured from status updates.
+  function checkGatewaySelection(s) {
+    switch (gatewayStep) {
+    case 0:
+      if (!s.ready) return false
+      check(s.selectedGateway === "", "multiple gateways do not imply a manual choice")
+      s.act()
+      gatewayStep++
+      break
+    case 1:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.gateway === undefined, "default connect leaves selection to daemon configuration")
+      acknowledge(true)
+      lastCommand = {}
+      status = Object.assign({}, status, { gateway: { name: "Australia", address: "au.example" },
+        gateways: [{ name: "Australia", address: "au.example" }] })
+      write(status)
+      gatewayStep++
+      break
+    case 2:
+      if (s.pending || s.gatewayOptions.length !== 1) return false
+      check(s.selectedGateway === "", "current single gateway does not become a manual choice")
+      s.act()
+      gatewayStep++
+      break
+    case 3:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.gateway === undefined, "single-gateway connect remains automatic")
+      acknowledge(true)
+      lastCommand = {}
+      status = Object.assign({}, status, { gateways: [
+        { name: "Australia", address: "au.example" }, { name: "Europe", address: "eu.example" }] })
+      write(status)
+      gatewayStep++
+      break
+    case 4:
+      if (s.pending || s.gatewayOptions.length !== 2) return false
+      s.selectedGateway = "missing.example"
+      s.act()
+      gatewayStep++
+      break
+    case 5:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.gateway === undefined && s.selectedGateway === "", "unlisted gateway is never sent")
+      acknowledge(true)
+      lastCommand = {}
+      gatewayStep++
+      break
+    case 6:
+      if (s.pending) return false
+      s.selectedGateway = "eu.example"
+      s.connectVpn("portal-b.example")
+      gatewayStep++
+      break
+    case 7:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === "portal-b.example" && lastCommand.gateway === undefined,
+        "explicit portal change drops old portal's gateway")
+      acknowledge(true)
+      lastCommand = {}
+      s.selectedGateway = "eu.example"
+      status = Object.assign({}, status, { portal: "portal-b.example" })
+      write(status)
+      gatewayStep++
+      break
+    case 8:
+      if (s.pending || s.snapshot.portal !== "portal-b.example") return false
+      check(s.selectedGateway === "", "portal status change clears selection even when address is still listed")
+      s.selectedGateway = "eu.example"
+      status = Object.assign({}, status, { gateways: [{ name: "Australia", address: "au.example" }] })
+      write(status)
+      gatewayStep++
+      break
+    case 9:
+      if (s.gatewayOptions.length !== 1) return false
+      check(s.selectedGateway === "", "gateway disappearing from status clears selection")
+      status = Object.assign({}, status, { gateways: [
+        { name: "Australia", address: "au.example" }, { name: "Europe", address: "eu.example" }] })
+      write(status)
+      gatewayStep++
+      break
+    case 10:
+      if (s.gatewayOptions.length !== 2) return false
+      s.selectedGateway = "eu.example"
+      s.selectedGateway = ""
+      s.act()
+      gatewayStep++
+      break
+    case 11:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.gateway === undefined, "Automatic clears a previous manual override")
+      acknowledge(true)
+      lastCommand = {}
+      status = Object.assign({}, status, { portal: "vpn.example" })
+      write(status)
+      gatewayStep++
+      break
+    case 12:
+      return !s.pending && s.snapshot.portal === "vpn.example"
+    }
+    return false
+  }
 
   QtObject {
     id: bar
@@ -50,8 +165,9 @@ ShellRoot {
     handler: Socket {
       id: peer
       onConnectedChanged: if (connected) {
+        root.connections++
         root.client = peer
-        peer.write(JSON.stringify({ type: "hello", version: "fixture", protocol: 1 }) + "\n" + JSON.stringify(root.status) + "\n")
+        peer.write(JSON.stringify({ type: "hello", version: "fixture", protocol: root.protocol }) + "\n" + JSON.stringify(root.status) + "\n")
         peer.flush()
       }
       parser: SplitParser {
@@ -83,6 +199,10 @@ ShellRoot {
     onTriggered: {
       var s = root.service
       if (!s) return
+      if (!root.gatewayChecksComplete) {
+        root.gatewayChecksComplete = root.checkGatewaySelection(s)
+        return
+      }
       switch (root.step) {
       case 0:
         if (!s.ready) return
@@ -178,41 +298,55 @@ ShellRoot {
         if (s.linkUp) return
         root.check(s.state === "stack-down" && !s.connected, "socket loss clears stale connected state")
         root.check(!s.pending && s.actionError !== "", "socket loss fails pending command")
+        root.check(s.selectedGateway === "", "daemon loss clears manual gateway selection")
         server.active = true
         root.step++
         break
       case 14:
         if (!s.ready) return
         root.check(true, "socket reconnects after daemon restart")
+        root.check(s.selectedGateway === "", "daemon restart does not manufacture a gateway pin")
+        root.protocol = 2
+        root.mismatchConnections = root.connections
+        root.mismatchSince = Date.now()
         root.write({ type: "hello", protocol: 2 })
         root.step++
         break
       case 15:
-        if (s.ready) return
+        if (Date.now() - root.mismatchSince < 6500) return
         root.check(s.faulted && !s.canAct, "protocol mismatch fails closed")
-        root.write({ type: "hello", protocol: 1 })
-        root.setState("future-state")
+        root.check(s.transportError === "Unsupported VPN widget protocol · 2", "protocol mismatch survives response timeout")
+        root.check(!s.linkUp && root.connections === root.mismatchConnections, "incompatible daemon is not retried automatically")
+        root.protocol = 1
+        s.refresh()
         root.step++
         break
       case 16:
+        if (!s.ready) return
+        root.check(root.connections === root.mismatchConnections + 1 && s.transportError === "",
+          "manual refresh negotiates a fresh connection after protocol upgrade")
+        root.setState("future-state")
+        root.step++
+        break
+      case 17:
         if (s.state !== "future-state") return
         root.check(s.unknownState && s.faulted && !s.canAct, "unknown states are never presented as VPN off")
         root.client.write("malformed\n"); root.client.flush()
         root.step++
         break
-      case 17:
+      case 18:
         if (!s.transportError) return
         root.check(!s.ready && s.faulted, "malformed response visible")
         root.setState("disconnected")
         root.step++
         break
-      case 18:
+      case 19:
         if (!s.ready) return
         root.check(true, "valid status recovers transport")
         root.write({ type: "auth-prompt", kind: "otp", message: "Second prompt" })
         root.step++
         break
-      case 19:
+      case 20:
         if (!s.otpMessage) return
         root.widget.destroy()
         var component = Qt.createComponent("file://" + Quickshell.env("GPWIDGET_TEST_SOURCE") + "/BarWidget.qml")
@@ -223,13 +357,13 @@ ShellRoot {
         server.active = false
         root.step++
         break
-      case 20:
+      case 21:
         if (s.linkUp) return
         s.transportError = ""
         s.act("fixture.example")
         root.step++
         break
-      case 21:
+      case 22:
         if (s.pending || s.actionError !== "fixture authorization denied") return
         root.check(true, "CLI startup failures surface the concrete error")
         console.log("PASS: native Omarchy widget runtime · " + root.checks + " checks")
