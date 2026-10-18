@@ -324,7 +324,11 @@ Panel {
             PanelSectionHeader { text: "CONNECTION"; foreground: root.foreground }
             InfoRow { label: "Portal"; value: root.service ? String(root.service.snapshot.portal || "—") : "—" }
             InfoRow { label: "Gateway"; value: root.service ? root.service.gatewayName || "—" : "—" }
-            InfoRow { label: "Address"; value: root.service && root.service.snapshot.gateway ? root.service.snapshot.gateway.address : "—" }
+            InfoRow {
+              label: "Gateway address"
+              value: root.service && root.service.snapshot.gateway ? String(root.service.snapshot.gateway.address || "") : ""
+              visible: value !== "" && root.service && value !== root.service.gatewayName
+            }
             InfoRow { label: "Tunnel IP"; value: root.conn.ipv4 || "—"; visible: root.service && root.service.connected }
             InfoRow { label: "Interface"; value: root.conn.ifname || "—"; visible: root.service && root.service.connected }
             InfoRow {
@@ -389,8 +393,9 @@ Panel {
     width: parent.width
     spacing: Style.spacing.controlGap
     Text {
+      id: caption
       textFormat: Text.PlainText
-      width: Style.space(82)
+      width: Math.max(Style.space(82), implicitWidth)
       text: parent.label
       color: Qt.darker(root.foreground, 1.4)
       font.family: root.fontFamily
@@ -398,7 +403,7 @@ Panel {
     }
     Text {
       textFormat: Text.PlainText
-      width: Math.max(0, parent.width - Style.space(82) - parent.spacing)
+      width: Math.max(0, parent.width - caption.width - parent.spacing)
       text: parent.value
       color: parent.urgent ? Commons.Color.urgent : root.foreground
       horizontalAlignment: Text.AlignRight

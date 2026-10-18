@@ -185,7 +185,8 @@ or disconnects; middle-click refreshes status.
 The panel provides portal setup, gateway selection for the next connection,
 connection/IP/interface details, live traffic and session countdowns, OTP
 entry, and a button to stop the VPN service. Authentication still uses the
-existing browser flow. Command failures remain visible until retried or the
+existing browser flow. The gateway address is shown only when it differs from
+the gateway's display name. Command failures remain visible until retried or the
 connection changes state. OTP values are sent only over the daemon socket
 and are cleared from the input on submission or panel close.
 
