@@ -10,7 +10,7 @@ A GlobalProtect VPN client built on OpenConnect with support for SSO authenticat
 >
 > **What this fork adds:**
 >
-> - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar**, **Omarchy Shell**, and **DankMaterialShell**, GTK4 layer-shell popup, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
+> - **`gpwidget`** — open-source (GPL-3.0) replacement for proprietary `gpgui`: Wayland bar widget for **waybar**, **Omarchy Shell**, and **DankMaterialShell**, native Omarchy and DMS panels, GTK4 layer-shell popup for Waybar, desktop notifications, same browser-based Okta/SAML flow. See [docs/widget.md](docs/widget.md).
 > - **`/usr/bin/gpgui` wrapper** (a regular file, not a symlink) so `gpservice` launches the open widget stack
 > - **Systemd user unit**, waybar module, and Omarchy Shell plugin examples under `apps/gpwidget/assets/`
 > - **Arch Linux packaging** (`make pkgbuild`) with `gtk4` / `gtk4-layer-shell` on x86_64 and aarch64
@@ -539,6 +539,8 @@ its logic has its own suite (requires `node`, not the Rust toolchain):
 
 ```bash
 make test-omarchy-widget
+# Actual Quickshell socket/process and native component checks (requires Omarchy 4):
+make test-omarchy-widget-runtime
 ```
 
 ### Build Options

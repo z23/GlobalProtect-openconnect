@@ -1,366 +1,432 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import Quickshell
-import Quickshell.Io
+import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
+import "Model.js" as Model
 
-// Native Omarchy bar adapter for the gpwidget daemon. The full controls stay
-// in gpwidget's GTK layer-shell popup, while this item follows Omarchy's bar
-// geometry, colors, tooltip and multi-monitor conventions.
-BarWidget {
+Panel {
   id: root
   moduleName: "gpwidget.vpn"
-
-  // Every state the daemon is known to report. Anything outside this set gets
-  // the fault presentation rather than falling through to idle — a renamed or
-  // added state from a version-mismatched daemon must not read as "VPN off"
-  // while the tunnel is actually up.
-  readonly property var knownStates: [
-    "stack-down", "needs-setup", "disconnected", "authenticating",
-    "connecting", "connected", "disconnecting", "error"
-  ]
-
-  property var snapshot: ({ state: "stack-down" })
-  // Identity of the payload behind `snapshot`. Steady state is the common case,
-  // so re-assigning an equivalent snapshot every poll would re-evaluate every
-  // dependent binding in every bar instance for zero visual change.
-  //
-  // Keyed on the three fields this widget renders rather than the whole
-  // payload: a connected snapshot also carries byte counters and rates that
-  // tick every poll, so hashing the raw JSON would never match. Anything added
-  // to stateLabel()/label()/tooltip() must be added to snapshotKeyOf() too, or
-  // it will freeze at whatever value it had when the state last changed.
-  // Empty until the first snapshot lands; snapshotKeyOf() never returns empty
-  // because a payload without a truthy `state` is rejected as invalid.
-  property string snapshotKey: ""
-  // Why the last `gpwidget toggle` failed. Deliberately not folded into
-  // `snapshot`: the next poll overwrites that within one interval, and the
-  // whole point is that the user learns why their click did nothing.
-  property string actionError: ""
-  // The state the failure was observed in, so it can be cleared the moment the
-  // daemon moves anywhere else. Clearing on connected/busy alone would strand a
-  // permanent fault after a disconnect that reported failure but took effect.
-  property string actionErrorState: ""
-
-  readonly property string vpnState: String(snapshot.state || "stack-down")
-  readonly property bool connected: vpnState === "connected"
-  readonly property bool busy: vpnState === "authenticating"
-    || vpnState === "connecting" || vpnState === "disconnecting"
-  readonly property bool unknownState: knownStates.indexOf(vpnState) === -1
-  readonly property bool faulted: vpnState === "error" || unknownState || actionError !== ""
-  readonly property string gatewayName: snapshot.gateway && snapshot.gateway.name
-    ? String(snapshot.gateway.name) : ""
-  readonly property bool showGateway: boolSetting("showGateway", true)
-
-  // shell.json is hand-edited, so a setting arrives as whatever the user typed.
-  // Accept the JSON booleans plus the obvious string and number spellings
-  // instead of silently reading `"true"` as false.
-  function boolSetting(name, fallback) {
-    var value = root.setting(name, fallback)
-    if (typeof value === "string") {
-      var text = value.trim().toLowerCase()
-      return ["", "false", "0", "no", "off"].indexOf(text) === -1
-    }
-    return !!value
+  // The host owns one service, so opening a panel on another monitor never
+  // starts a second VPN action or loses an OTP prompt.
+  property var service: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
+  readonly property bool vertical: bar ? bar.vertical : false
+  readonly property color foreground: Commons.Color.popups.text
+  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property string state: service ? service.state : "error"
+  readonly property string statusText: service ? service.statusText : "VPN widget service unavailable"
+  readonly property string errorText: service ? service.errorText : "Reload the complete gpwidget Omarchy plugin, including Service.qml."
+  readonly property bool faulted: !service || service.faulted
+  readonly property bool showGateway: Model.boolSetting(setting("showGateway", false), false)
+  readonly property bool showPortal: service && (state === "needs-setup" || state === "stack-down")
+  readonly property bool showOtp: service && service.otpMessage !== ""
+  readonly property bool canAct: service && service.canAct && (state !== "needs-setup" || portal.text.trim() !== "")
+  readonly property string icon: faulted ? "󰦞" : service && service.busy ? "󰑐" : service && service.connected ? "󰒃" : "󰒙"
+  readonly property var conn: service && service.snapshot.conn ? service.snapshot.conn : ({})
+  readonly property var session: service && service.snapshot.session ? service.snapshot.session : ({})
+  readonly property var sections: {
+    var result = ["action"]
+    if (showPortal) result.push("portal")
+    if (service && service.gatewayOptions.length > 1) result.push("gateway")
+    if (showOtp) result.push("otp", "submit")
+    result.push("refresh")
+    if (service && service.ready) result.push("quit")
+    return result
   }
-
-  // Pick the actual cause out of a CLI stderr dump for the tooltip, which is
-  // single-line per entry.
-  //
-  // Not the first line: gpwidget defaults to InfoLevelVerbosity, so the launch
-  // path emits `INFO ... Starting VPN service stack via ...` before anything
-  // goes wrong, while cli.rs prints the real cause last as `Error: ...`. Taking
-  // the head would report the banner as the failure in precisely the
-  // polkit-denied case this text exists to explain.
-  function errorLine(text) {
-    var lines = String(text || "").split("\n")
-      .map(function(line) { return line.trim() })
-      .filter(function(line) { return line !== "" })
-    if (lines.length === 0) return ""
-
-    var chosen = lines[lines.length - 1]
-    for (var i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].indexOf("Error:") === 0) {
-        chosen = lines[i].slice("Error:".length).trim()
-        break
-      }
-    }
-    return chosen.length > 120 ? chosen.slice(0, 119) + "…" : chosen
-  }
-
-  // NUL-joined so gateway or error text containing the separator cannot make
-  // two distinct snapshots hash alike.
-  function snapshotKeyOf(value) {
-    return [
-      String(value.state),
-      value.gateway && value.gateway.name ? String(value.gateway.name) : "",
-      value.error ? String(value.error) : ""
-    ].join("\u0000")
-  }
-
-  function applySnapshot(value) {
-    var key = snapshotKeyOf(value)
-    if (key === root.snapshotKey) return
-    root.snapshotKey = key
-    root.snapshot = value
-  }
-
-  function setError(message) {
-    root.applySnapshot({ state: "error", error: message })
-  }
-
-  function setActionError(message) {
-    root.actionError = message
-    root.actionErrorState = root.vpnState
-  }
-
-  function stateLabel() {
-    switch (vpnState) {
-    case "connected": return gatewayName === "" ? "Connected" : "Connected · " + gatewayName
-    case "authenticating": return "Authenticating…"
-    case "connecting": return "Connecting…"
-    case "disconnecting": return "Disconnecting…"
-    case "disconnected": return "Disconnected"
-    case "needs-setup": return "Setup required"
-    case "error": return snapshot.error ? "Error · " + snapshot.error : "Error"
-    case "stack-down": return "VPN off"
-    default: return "Unknown state · " + vpnState
-    }
-  }
-
-  function label() {
-    if (root.vertical) return "VPN"
-    if (faulted) return "VPN  !"
-    if (connected && showGateway && gatewayName !== "") return "VPN  " + gatewayName
-    if (busy) return "VPN  …"
-    return "VPN"
-  }
-
-  function tooltip() {
-    var lines = [stateLabel()]
-    if (actionError !== "") lines.push("Last action failed · " + actionError)
-    lines.push("Left click: details · Right click: connect/disconnect")
-    return lines.join("\n")
-  }
-
-  function refresh() {
-    if (statusProcess.running) return
-    statusProcess.sawExit = false
-    statusProcess.timedOut = false
-    statusWatchdog.restart()
-    statusProcess.running = true
-  }
-
-  function toggle() {
-    if (toggleProcess.running) return
-    root.actionError = ""
-    root.actionErrorState = ""
-    toggleProcess.sawExit = false
-    toggleProcess.running = true
-    refreshDelay.restart()
-  }
-
-  // A move away from the state the failure was seen in means something actually
-  // happened, so a stale "your last click failed" would outlive the condition it
-  // described. Anchoring on the recorded state rather than clearing on every
-  // change keeps a poll landing mid-toggle from erasing a fresh error.
-  onVpnStateChanged: {
-    if (root.actionError !== "" && root.vpnState !== root.actionErrorState) {
-      root.actionError = ""
-      root.actionErrorState = ""
-    }
-  }
+  property string focusSection: "action"
+  property bool cursorActive: false
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  Timer {
-    id: pollTimer
-    // `refreshIntervalSec` is hand-edited too. A non-numeric value yields NaN,
-    // which coerces to 0 on the Timer's int interval — on a repeating,
-    // triggeredOnStart timer that is a hot loop spawning back-to-back status
-    // processes, so fall back rather than clamp.
-    //
-    // The upper clamp is not cosmetic: an interval in milliseconds that exceeds
-    // int range wraps through ToInt32, and 2^29 seconds lands back on exactly
-    // 0 ms — the same hot loop, reached from the opposite end.
-    interval: {
-      var seconds = Number(root.setting("refreshIntervalSec", 3))
-      if (!isFinite(seconds)) seconds = 3
-      return Math.min(3600, Math.max(1, seconds)) * 1000
-    }
-    running: true
-    repeat: true
-    triggeredOnStart: true
-    onTriggered: root.refresh()
+  function chooseSection(section) { focusSection = section; cursorActive = true }
+  function moveCursor(direction) {
+    var index = sections.indexOf(focusSection)
+    chooseSection(sections[(Math.max(0, index) + direction + sections.length) % sections.length])
+    var target = focusSection === "portal" ? portal : focusSection === "otp" ? otp : null
+    if (target) target.forceActiveFocus()
+    else keyCatcher.forceActiveFocus()
   }
-
-  // `gpwidget status` blocks on its socket read with no timeout of its own, so
-  // a wedged daemon would otherwise freeze polling forever on a stale label.
-  Timer {
-    id: statusWatchdog
-    interval: Math.max(4000, pollTimer.interval * 2)
-    repeat: false
-    onTriggered: {
-      if (!statusProcess.running) return
-      statusProcess.timedOut = true
-      // Quickshell maps `running = false` to terminate() — SIGTERM, which
-      // gpwidget does not handle, so the blocked read is torn down and `exited`
-      // still arrives (and is ignored, below).
-      statusProcess.running = false
-      root.setError("gpwidget status timed out")
-      statusKill.restart()
+  function scrollCursorIntoView() {
+    var target = { action: hero, portal: portal, gateway: gateway, otp: otp,
+      submit: submit, refresh: refreshButton, quit: quit }[focusSection]
+    if (!target || panelFlick.height <= 0) return
+    var y = target.mapToItem(column, 0, 0).y
+    var bottom = y + target.height
+    if (y < panelFlick.contentY) panelFlick.contentY = y
+    else if (bottom > panelFlick.contentY + panelFlick.height) panelFlick.contentY = bottom - panelFlick.height
+    panelFlick.contentY = Math.max(0, Math.min(panelFlick.contentY, panelFlick.contentHeight - panelFlick.height))
+  }
+  onFocusSectionChanged: Qt.callLater(scrollCursorIntoView)
+  function activateCursor() {
+    if (focusSection === "action" && canAct) service.act(portal.text)
+    else if (focusSection === "gateway") gateway.open()
+    else if (focusSection === "portal") portal.forceActiveFocus()
+    else if (focusSection === "otp") otp.forceActiveFocus()
+    else if (focusSection === "submit") submitOtp()
+    else if (focusSection === "refresh" && service) service.refresh()
+    else if (focusSection === "quit" && service) service.sendCommand("quit")
+  }
+  function submitOtp() {
+    if (service && service.submitOtp(otp.text)) {
+      otp.text = ""
+      keyCatcher.forceActiveFocus()
     }
   }
-
-  // SIGTERM is a request. If the process ignores it or is wedged, `running`
-  // never clears and refresh() early-returns for the rest of the session, since
-  // the watchdog is only ever re-armed from inside refresh(). Escalate, as
-  // Quickshell's own Process docs prescribe for this case.
-  Timer {
-    id: statusKill
-    interval: 2000
-    repeat: false
-    onTriggered: if (statusProcess.running) statusProcess.signal(9)
-  }
-
-  Process {
-    id: statusProcess
-    command: ["gpwidget", "status"]
-    running: false
-
-    // Set in onExited so onRunningChanged can tell a real exit apart from
-    // QProcess::FailedToStart, which emits runningChanged and no exit at all.
-    property bool sawExit: false
-    property bool timedOut: false
-
-    // Buffer stdout until exit so we can reject non-zero status and avoid
-    // treating missing/failed gpwidget as a healthy stack-down snapshot.
-    stdout: StdioCollector {
-      id: statusStdout
-      waitForEnd: true
-    }
-
-    // gpwidget prints the concrete cause here — socket permissions, a serde
-    // error from a version-mismatched daemon. Without a collector Quickshell
-    // closes the channel and the diagnostic is unrecoverable from the widget.
-    stderr: StdioCollector {
-      id: statusStderr
-      waitForEnd: true
-    }
-
-    onExited: function(exitCode) {
-      statusProcess.sawExit = true
-      statusWatchdog.stop()
-      // The process is gone, so escalation is moot — and leaving it armed would
-      // fire SIGKILL at whatever pid the next poll happens to get.
-      statusKill.stop()
-
-      // The watchdog caused this exit and already reported something more
-      // useful than the signal that killed it.
-      if (statusProcess.timedOut) return
-
-      if (exitCode !== 0) {
-        root.setError(root.errorLine(statusStderr.text) || "gpwidget status failed")
-        return
-      }
-
-      var raw = String(statusStdout.text || "").trim()
-      if (raw === "") {
-        root.setError("Empty status response")
-        return
-      }
-
-      try {
-        var value = JSON.parse(raw)
-        if (value && typeof value === "object" && !Array.isArray(value) && value.state) {
-          root.applySnapshot(value)
-        } else {
-          root.setError("Invalid status response")
-        }
-      } catch (e) {
-        root.setError("Invalid status response")
-      }
-    }
-
-    onRunningChanged: {
-      // FailedToStart — gpwidget missing or not on PATH — only flips `running`
-      // back to false. There is no exit code to map, so without this the widget
-      // would sit on its initial stack-down snapshot and look benign.
-      if (!statusProcess.running && !statusProcess.sawExit) {
-        statusWatchdog.stop()
-        statusKill.stop()
-        root.setError("gpwidget not found on PATH")
-      }
+  function inputKey(event) {
+    if (event.key === Qt.Key_Escape) {
+      keyCatcher.forceActiveFocus()
+      root.close()
+      event.accepted = true
+    } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+      moveCursor(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+      event.accepted = true
     }
   }
 
-  // With the stack down, `toggle` escalates to `gpclient launch-gui` behind
-  // pkexec and can take 30s, so it gets no watchdog — but its stderr is the
-  // only signal the user has when polkit is denied or the stack never comes up,
-  // and the daemon isn't around to deliver a toast.
-  Process {
-    id: toggleProcess
-    command: ["gpwidget", "toggle"]
-    running: false
-
-    property bool sawExit: false
-
-    stderr: StdioCollector {
-      id: toggleStderr
-      waitForEnd: true
-    }
-
-    onExited: function(exitCode) {
-      toggleProcess.sawExit = true
-      if (exitCode !== 0) {
-        root.setActionError(root.errorLine(toggleStderr.text) || "gpwidget toggle failed")
-      }
-      root.broadcast("refresh")
-    }
-
-    onRunningChanged: {
-      if (!toggleProcess.running && !toggleProcess.sawExit) {
-        root.setActionError("gpwidget not found on PATH")
-      }
+  onSectionsChanged: if (sections.indexOf(focusSection) < 0) focusSection = "action"
+  onOpenedChanged: {
+    if (opened) {
+      cursorActive = false
+      focusSection = "action"
+      panelFlick.contentY = 0
+      if (service) service.refresh()
+      Qt.callLater(function() { (root.showOtp ? otp : keyCatcher).forceActiveFocus() })
+    } else {
+      otp.text = ""
+      gateway.close()
     }
   }
 
-  // Omarchy builds one widget instance per bar surface per monitor. Without the
-  // broadcast, the clicked bar would update while every other screen kept the
-  // contradictory old state until its own poll came round.
-  Timer {
-    id: refreshDelay
-    interval: 500
-    repeat: false
-    onTriggered: root.broadcast("refresh")
+  Connections {
+    target: root.service
+    function onOtpMessageChanged() {
+      otp.text = ""
+      if (root.opened && root.showOtp) Qt.callLater(function() { otp.forceActiveFocus() })
+    }
   }
 
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.label()
-    // Omarchy's active colour is the urgent/error accent (red in the stock
-    // themes), so reserve it for a real VPN error rather than connectivity.
-    active: root.faulted
-    // An unconfigured portal is not a working tunnel; without needs-setup here
-    // it renders pixel-identical to a connected one whenever the gateway name
-    // is hidden.
-    //
-    // Never dim a fault. WidgetButton multiplies dimmed state to 0.45 opacity,
-    // and the two overlap exactly where it hurts — a failed toggle against a
-    // down stack would wash the urgent accent out to nearly invisible.
-    dimmed: !root.faulted
-      && (root.vpnState === "stack-down" || root.vpnState === "disconnected"
-        || root.vpnState === "needs-setup")
-    tooltipText: root.tooltip()
-
-    // WidgetButton's MouseArea accepts middle-click too and forwards it here;
-    // anything but the two documented buttons is ignored rather than falling
-    // through to the popup.
+    labelVisible: false
+    hasVisualContent: true
+    fixedWidth: root.vertical ? -1 : Math.max(Style.bar.iconSlot, barContent.implicitWidth + Style.space(12))
+    fixedHeight: root.vertical ? Style.bar.iconSlot : -1
+    dimmed: !root.faulted && (!root.service || !root.service.connected) && !(root.service && root.service.busy)
+    tooltipText: root.statusText + (root.service && root.service.gatewayName ? " · " + root.service.gatewayName : "")
+      + (root.errorText !== "" ? "\n" + root.errorText : "")
+      + "\nLeft click: details · Right click: connect/disconnect"
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.toggle()
-      else if (b === Qt.LeftButton) Quickshell.execDetached(["gpwidget", "popup"])
+      if (b === Qt.LeftButton) root.toggle()
+      else if (b === Qt.RightButton && root.canAct) root.service.act(portal.text)
+      else if (b === Qt.MiddleButton && root.service) root.service.refresh()
+    }
+
+    Row {
+      id: barContent
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+      OpticalGlyph {
+        width: Style.bar.iconCanvas
+        height: Style.bar.iconCanvas
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.icon
+        fontFamily: button.fontFamily
+        fontSize: Style.bar.iconFont
+        color: root.faulted ? button.activeColor : button.foreground
+      }
+      Text {
+        textFormat: Text.PlainText
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.showGateway && !root.vertical && root.service && root.service.connected
+        text: root.service ? root.service.gatewayName : ""
+        width: visible ? Math.min(implicitWidth, Style.space(130)) : 0
+        elide: Text.ElideRight
+        color: button.foreground
+        font.family: button.fontFamily
+        font.pixelSize: Style.font.body
+      }
+    }
+  }
+
+  KeyboardPanel {
+    id: panel
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.opened
+    focusTarget: root.showOtp ? otp : keyCatcher
+    contentWidth: panel.fittedContentWidth(Style.space(390))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: portal.activeFocus || otp.activeFocus || gateway.popupOpen
+      onMoveRequested: function(dx, dy) {
+        if (dy) root.moveCursor(dy)
+        else if (dx) root.switchPanel(dx)
+      }
+      onTabRequested: function(direction) { root.moveCursor(direction) }
+      onActivateRequested: root.activateCursor()
+      onCloseRequested: root.close()
+      onTextKey: function(text) { if (text.toLowerCase() === "r" && root.service) root.service.refresh() }
+
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+
+        Column {
+          id: column
+          width: panelFlick.width
+          spacing: Style.spacing.panelGap
+
+          PanelHero {
+            id: hero
+            width: parent.width
+            title: "GlobalProtect"
+            meta: root.statusText
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            iconComponent: Component {
+              Text {
+                textFormat: Text.PlainText
+                text: root.icon
+                color: root.faulted ? Commons.Color.urgent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.displayLarge
+              }
+            }
+            trailingControl: Component {
+              Button {
+                text: root.service ? root.service.actionText : "Unavailable"
+                enabled: root.canAct
+                bordered: true
+                foreground: root.foreground
+                hasCursor: root.cursorActive && root.focusSection === "action"
+                onHovered: function(hot) { if (hot) root.chooseSection("action") }
+                onClicked: root.service.act(portal.text)
+              }
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            visible: root.errorText !== ""
+            text: root.errorText
+            wrapMode: Text.Wrap
+            color: Commons.Color.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.spacing.labelGap
+            visible: root.showPortal
+            PanelSectionHeader { text: root.state === "needs-setup" ? "PORTAL SETUP" : "PORTAL"; foreground: root.foreground }
+            TextField {
+              id: portal
+              width: parent.width
+              placeholderText: root.state === "needs-setup" ? "vpn.example.com" : "Use configured portal, or enter an address"
+              foreground: root.foreground
+              enabled: !root.service || !root.service.pending
+              hasCursor: root.cursorActive && root.focusSection === "portal"
+              onActiveFocusChanged: if (activeFocus) root.chooseSection("portal")
+              onAccepted: if (root.canAct) root.service.act(text)
+              Keys.onPressed: function(event) { root.inputKey(event) }
+            }
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "The portal is saved after a successful connection."
+              wrapMode: Text.Wrap
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Dropdown {
+            id: gateway
+            width: parent.width
+            visible: root.service && root.service.gatewayOptions.length > 1
+            label: root.service && root.service.connected ? "GATEWAY FOR NEXT CONNECTION" : "GATEWAY"
+            options: root.service ? root.service.gatewayOptions : []
+            value: root.service ? root.service.selectedGateway : ""
+            foreground: root.foreground
+            enabled: root.service && !root.service.busy && !root.service.pending
+            hasCursor: root.cursorActive && root.focusSection === "gateway"
+            onHovered: function(hot) { if (hot) root.chooseSection("gateway") }
+            onChanged: function(value) { root.service.selectedGateway = value; keyCatcher.forceActiveFocus() }
+          }
+
+          Column {
+            width: parent.width
+            visible: root.showOtp
+            spacing: Style.spacing.lg
+            PanelSectionHeader { text: "ONE-TIME PASSWORD"; foreground: root.foreground }
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: root.service ? root.service.otpMessage : ""
+              wrapMode: Text.Wrap
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            Row {
+              width: parent.width
+              spacing: Style.spacing.controlGap
+              TextField {
+                id: otp
+                width: parent.width - submit.implicitWidth - parent.spacing
+                password: true
+                placeholderText: "One-time password"
+                foreground: root.foreground
+                enabled: root.service && !root.service.pending
+                hasCursor: root.cursorActive && root.focusSection === "otp"
+                inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
+                onActiveFocusChanged: if (activeFocus) root.chooseSection("otp")
+                onAccepted: root.submitOtp()
+                Keys.onPressed: function(event) { root.inputKey(event) }
+              }
+              Button {
+                id: submit
+                text: "Submit"
+                enabled: otp.text.trim() !== "" && root.service && !root.service.pending
+                bordered: true
+                foreground: root.foreground
+                hasCursor: root.cursorActive && root.focusSection === "submit"
+                onHovered: function(hot) { if (hot) root.chooseSection("submit") }
+                onClicked: root.submitOtp()
+              }
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.spacing.lg
+            visible: root.service && root.service.ready && root.state !== "needs-setup"
+            PanelSeparator { foreground: root.foreground }
+            PanelSectionHeader { text: "CONNECTION"; foreground: root.foreground }
+            InfoRow { label: "Portal"; value: root.service ? String(root.service.snapshot.portal || "—") : "—" }
+            InfoRow { label: "Gateway"; value: root.service ? root.service.gatewayName || "—" : "—" }
+            InfoRow { label: "Address"; value: root.service && root.service.snapshot.gateway ? root.service.snapshot.gateway.address : "—" }
+            InfoRow { label: "Tunnel IP"; value: root.conn.ipv4 || "—"; visible: root.service && root.service.connected }
+            InfoRow { label: "Interface"; value: root.conn.ifname || "—"; visible: root.service && root.service.connected }
+            InfoRow {
+              label: "Uptime"
+              visible: root.service && root.service.connected
+              value: root.conn.since ? Model.duration(root.service.now - root.conn.since) : "—"
+            }
+            InfoRow {
+              label: "Session"
+              visible: root.service && root.service.connected
+              value: !root.session.expiresAt ? "—" : root.session.expiresAt <= root.service.now ? "Expired"
+                : Model.duration(root.session.expiresAt - root.service.now) + " remaining"
+              urgent: !!root.session.expiresAt && !!root.service && root.session.expiresAt - root.service.now <= (root.session.warnPriorSecs ?? 600)
+            }
+          }
+
+          Column {
+            width: parent.width
+            visible: root.service && root.service.connected
+            spacing: Style.spacing.lg
+            PanelSeparator { foreground: root.foreground }
+            Row {
+              width: parent.width
+              Traffic { width: parent.width / 2; label: "↓ DOWNLOAD"; rate: root.conn.rxRate || 0; total: root.conn.rxBytes || 0 }
+              Traffic { width: parent.width / 2; label: "↑ UPLOAD"; rate: root.conn.txRate || 0; total: root.conn.txBytes || 0 }
+            }
+          }
+
+          PanelSeparator { foreground: root.foreground }
+          Row {
+            width: parent.width
+            spacing: Style.spacing.controlGap
+            Button {
+              id: refreshButton
+              text: "Refresh"
+              foreground: root.foreground
+              hasCursor: root.cursorActive && root.focusSection === "refresh"
+              onHovered: function(hot) { if (hot) root.chooseSection("refresh") }
+              onClicked: if (root.service) root.service.refresh()
+            }
+            Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - quit.implicitWidth - parent.spacing * 2); height: 1 }
+            Button {
+              id: quit
+              text: "Stop service"
+              visible: root.service && root.service.ready
+              enabled: root.service && !root.service.pending
+              foreground: root.foreground
+              hasCursor: root.cursorActive && root.focusSection === "quit"
+              onHovered: function(hot) { if (hot) root.chooseSection("quit") }
+              onClicked: root.service.sendCommand("quit")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component InfoRow: Row {
+    property string label: ""
+    property string value: ""
+    property bool urgent: false
+    width: parent.width
+    spacing: Style.spacing.controlGap
+    Text {
+      textFormat: Text.PlainText
+      width: Style.space(82)
+      text: parent.label
+      color: Qt.darker(root.foreground, 1.4)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+    }
+    Text {
+      textFormat: Text.PlainText
+      width: Math.max(0, parent.width - Style.space(82) - parent.spacing)
+      text: parent.value
+      color: parent.urgent ? Commons.Color.urgent : root.foreground
+      horizontalAlignment: Text.AlignRight
+      wrapMode: Text.WrapAnywhere
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+    }
+  }
+
+  component Traffic: Column {
+    property string label: ""
+    property real rate: 0
+    property real total: 0
+    spacing: Style.spacing.labelGap
+    PanelSectionHeader { text: parent.label; foreground: root.foreground }
+    Text {
+      textFormat: Text.PlainText
+      text: Model.bytes(parent.rate) + "/s"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.heading
+    }
+    Text {
+      textFormat: Text.PlainText
+      text: Model.bytes(parent.total) + " total"
+      color: Qt.darker(root.foreground, 1.4)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
     }
   }
 }

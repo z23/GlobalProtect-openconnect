@@ -166,7 +166,10 @@ build-rs:
 # widget is a shipped QML asset rather than a compiled target, and this needs
 # node rather than the Rust toolchain.
 test-omarchy-widget:
-	node apps/gpwidget/assets/omarchy/BarWidget.test.js
+	node apps/gpwidget/assets/omarchy/Model.test.js
+
+test-omarchy-widget-runtime:
+	apps/gpwidget/tests/omarchy/run.sh
 
 clean:
 	$(CARGO) clean
@@ -248,7 +251,9 @@ install-linux: install-unix
 		install -Dm644 apps/gpwidget/assets/waybar/style.css "$$share/examples/waybar/style.css"; \
 		install -Dm644 apps/gpwidget/assets/systemd/gpwidget-stack.service "$$share/examples/systemd/gpwidget-stack.service"; \
 		install -Dm644 apps/gpwidget/assets/omarchy/manifest.json "$$share/examples/omarchy/manifest.json"; \
-		install -Dm644 apps/gpwidget/assets/omarchy/BarWidget.qml "$$share/examples/omarchy/BarWidget.qml"; \
+		for file in BarWidget.qml Service.qml Model.js; do \
+			install -Dm644 "apps/gpwidget/assets/omarchy/$$file" "$$share/examples/omarchy/$$file"; \
+		done; \
 		for file in plugin.json GlobalProtectVPN.qml GlobalProtectSettings.qml Formatting.js README.md; do \
 			install -Dm644 "packaging/dms/GlobalProtectVPN/$$file" "$$share/dms/GlobalProtectVPN/$$file"; \
 		done; \

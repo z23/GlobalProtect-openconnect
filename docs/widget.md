@@ -7,7 +7,8 @@ and the same browser-based Okta/SAML login flow as the official client.
 
 ```
 waybar module ───────── gpwidget status --waybar ──┐
-GTK4 layer-shell popup ─ gpwidget popup ───────────┤ NDJSON over
+GTK4 layer-shell popup ─ gpwidget popup ───────────┤
+Omarchy panel (QML) ──────────────────────────────┤ NDJSON over
 DMS plugin (QML) ──────────────────────────────────┼─ $XDG_RUNTIME_DIR/gpwidget.sock
 CLI ─────────────────── gpwidget connect|disconnect┘
                                   │
@@ -168,24 +169,52 @@ add it to the right side of the bar:
 
 ```sh
 mkdir -p ~/.config/omarchy/plugins/gpwidget.vpn
-cp /usr/share/gpwidget/examples/omarchy/manifest.json \
-   /usr/share/gpwidget/examples/omarchy/BarWidget.qml \
+cp /usr/share/gpwidget/examples/omarchy/{manifest.json,BarWidget.qml,Service.qml,Model.js} \
    ~/.config/omarchy/plugins/gpwidget.vpn/
 # Discover the new plugin before enabling (hot-reload can race a fresh copy).
 omarchy-shell shell rescanPlugins
 omarchy plugin enable gpwidget.vpn --section right
 ```
 
-The compact widget follows Omarchy's bar sizing and theme. Left-click opens
-the full GTK layer-shell popup; right-click connects or disconnects. Its
-`showGateway` and `refreshIntervalSec` settings can be changed in the bar
-editor or on the layout entry in `~/.config/omarchy/shell.json`, for example:
+The icon and native Quickshell panel follow Omarchy's theme, font, spacing,
+and corner settings. The panel opens beside the clicked widget on its monitor
+and uses the shell's focus, outside-click dismissal, and panel switching.
+Left-click opens or closes it; right-click connects, cancels authentication,
+or disconnects; middle-click refreshes status.
+
+The panel provides portal setup, gateway selection for the next connection,
+connection/IP/interface details, live traffic and session countdowns, OTP
+entry, and a button to stop the VPN service. Authentication still uses the
+existing browser flow. Command failures remain visible until retried or the
+connection changes state. OTP values are sent only over the daemon socket
+and are cleared from the input on submission or panel close.
+
+A shared service maintains one socket connection across all bar monitors,
+with automatic reconnection when the daemon restarts. Status is pushed by the
+daemon; there is no status subprocess polling. `refreshIntervalSec` from older
+plugin installations is ignored. **Copy all four plugin files when upgrading.**
+When upgrading from the old GTK-launching plugin, run `omarchy restart shell`
+once after copying the files so Qt discovers the new QML service and model.
+Subsequent edits to the existing plugin files hot-reload normally.
+
+The default bar item is icon-only. Enable the connected gateway label in the
+bar editor or on the layout entry in `~/.config/omarchy/shell.json`:
 
 ```json
-{ "id": "gpwidget.vpn", "showGateway": true, "refreshIntervalSec": 3 }
+{ "id": "gpwidget.vpn", "showGateway": true }
 ```
 
 inside `bar.layout.right` (or whichever section the widget occupies).
+
+Keyboard controls inside the panel: Up/Down or j/k and Tab/Shift+Tab move
+between controls; Enter or Space activates; Left/Right or h/l switch to
+neighboring shell panels; R refreshes; Esc closes. Text inputs keep normal
+editing keys and use Enter to connect or submit the OTP. The gateway dropdown
+uses its own arrow/j/k navigation and Enter to select. Selecting a gateway
+while connected takes effect on the next connection.
+
+The GTK popup remains available through `gpwidget popup` for Waybar and other
+bars.
 
 ## Popup
 
