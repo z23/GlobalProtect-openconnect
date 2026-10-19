@@ -145,6 +145,43 @@ ShellRoot {
       break
     case 9:
       if (s.pending) return false
+      // The daemon saves a portal before trying it, so a typo surfaces as a
+      // sticky error with that portal configured rather than as needs-setup.
+      status = Object.assign({}, status, { state: "error", portal: "vpn.exmaple", error: "Portal unreachable" })
+      write(status)
+      portalStep++
+      break
+    case 10:
+      if (s.state !== "error" || !s.ready) return false
+      check(widget.showPortal && widget.sections.indexOf("portal") >= 0, "connection error exposes portal entry")
+      portalField.text = "vpn.example"
+      actionButton.clicked()
+      portalStep++
+      break
+    case 11:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === "vpn.example", "corrected portal is sent from the error state")
+      acknowledge(true)
+      lastCommand = {}
+      status = Object.assign({}, status, { state: "disconnected", portal: "vpn.example" })
+      delete status.error
+      write(status)
+      portalStep++
+      break
+    case 12:
+      if (s.pending || s.state !== "disconnected") return false
+      check(!widget.showPortal && portalField.text === "", "leaving the error state clears the correction draft")
+      client.write("malformed\n"); client.flush()
+      portalStep++
+      break
+    case 13:
+      if (!s.transportError) return false
+      check(s.state === "error" && !widget.showPortal, "transport errors do not offer portal entry")
+      write(status)
+      portalStep++
+      break
+    case 14:
+      if (!s.ready) return false
       portalField.text = ""
       return true
     }

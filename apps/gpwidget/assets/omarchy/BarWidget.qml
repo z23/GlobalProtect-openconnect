@@ -20,7 +20,10 @@ Panel {
   readonly property string errorText: service ? service.errorText : "Reload the complete gpwidget Omarchy plugin, including Service.qml."
   readonly property bool faulted: !service || service.faulted
   readonly property bool showGateway: Model.boolSetting(setting("showGateway", false), false)
-  readonly property bool showPortal: service && (state === "needs-setup" || state === "stack-down")
+  // A failed attempt has already saved its portal and the daemon's error is
+  // sticky, so offer the field there too; transport errors are not portal faults.
+  readonly property bool showPortal: service && (state === "needs-setup" || state === "stack-down"
+    || (state === "error" && service.ready))
   readonly property bool showOtp: service && service.otpMessage !== ""
   readonly property bool canAct: service && service.canAct && (state !== "needs-setup" || portal.text.trim() !== "")
   readonly property string icon: faulted ? "󰦞" : service && service.busy ? "󰑐" : service && service.connected ? "󰒃" : "󰒙"

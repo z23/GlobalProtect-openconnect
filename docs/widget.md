@@ -191,8 +191,10 @@ connection changes state. OTP values are sent only over the daemon socket
 and are cleared from the input on submission or panel close.
 
 The setup portal is saved before the connection attempt, even if the attempt
-fails. Its draft is cleared when the field hides; subsequent connects use the
-configured portal unless you enter an address in the visible setup field.
+fails. The portal field therefore also appears after a connection error, so a
+mistyped or outdated portal can be corrected without stopping the service. Its
+draft is cleared when the field hides; subsequent connects use the configured
+portal unless you enter an address in the visible portal field.
 
 A shared service maintains one socket connection across all bar monitors,
 with automatic reconnection when the daemon restarts. Status is pushed by the
