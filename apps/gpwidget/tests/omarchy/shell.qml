@@ -10,6 +10,12 @@ ShellRoot {
   property var lastCommand: ({})
   property int step: 0
   property int checks: 0
+  property int portalStep: 0
+  property bool portalChecksComplete: false
+  property var portalField: null
+  property var actionButton: null
+  property var barButton: null
+  property var gatewayPicker: null
   property int gatewayStep: 0
   property bool gatewayChecksComplete: false
   property int protocol: 1
@@ -22,7 +28,7 @@ ShellRoot {
 
   function check(value, label) {
     if (!value) {
-      console.error("FAIL: step " + step + ", gateway step " + gatewayStep + ": " + label)
+      console.error("FAIL: step " + step + ", portal step " + portalStep + ", gateway step " + gatewayStep + ": " + label)
       Qt.quit()
       throw new Error(label)
     }
@@ -31,6 +37,119 @@ ShellRoot {
   function write(message) { client.write(JSON.stringify(message) + "\n"); client.flush() }
   function acknowledge(ok) { write({ type: "ack", id: lastCommand.id, ok: ok, error: ok ? null : "fixture rejection" }) }
   function setState(state) { status = Object.assign({}, status, { state: state }); write(status) }
+
+  // Walk both visual children and the popup's content so tests can exercise
+  // the real controls, including Dropdown.selectCurrent()'s imperative write.
+  function findObject(object, predicate, seen) {
+    if (!object) return null
+    seen = seen || []
+    if (seen.indexOf(object) >= 0) return null
+    seen.push(object)
+    if (predicate(object)) return object
+    var groups = [object.data, object.children, object.contentItem, object.item]
+    for (var i = 0; i < groups.length; i++) {
+      var group = groups[i]
+      if (!group) continue
+      if (typeof group.length !== "number") group = [group]
+      for (var j = 0; j < group.length; j++) {
+        var found = findObject(group[j], predicate, seen)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  function control(name) {
+    var result = findObject(widget, function(object) { return object.objectName === name })
+    check(result !== null, "panel control exists: " + name)
+    return result
+  }
+  function selectGateway(value) {
+    var list = findObject(gatewayPicker, function(object) { return typeof object.selectCurrent === "function" })
+    check(list !== null, "real gateway option list exists")
+    list.currentIndex = list.indexOfValue(value)
+    check(list.currentIndex >= 0, "gateway choice is advertised")
+    list.selectCurrent()
+    check(service.selectedGateway === value && gatewayPicker.value === value, "picker applies user selection")
+  }
+  function checkAutomatic(label) {
+    check(service.selectedGateway === "" && gatewayPicker.value === "" && gatewayPicker.currentLabel() === "Automatic", label)
+  }
+
+  function checkPortalActions(s) {
+    switch (portalStep) {
+    case 0:
+      if (!s.ready) return false
+      portalField = control("portalField")
+      actionButton = control("vpnActionButton")
+      barButton = control("vpnBarButton")
+      gatewayPicker = control("gatewayPicker")
+      status = Object.assign({}, status, { state: "needs-setup", portal: null })
+      write(status)
+      portalStep++
+      break
+    case 1:
+      if (s.state !== "needs-setup") return false
+      check(widget.showPortal, "setup exposes portal entry")
+      portalField.text = "vpn.example"
+      portalField.accepted()
+      portalStep++
+      break
+    case 2:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === "vpn.example", "visible portal entry is sent on Enter")
+      acknowledge(true)
+      lastCommand = {}
+      status = Object.assign({}, status, { state: "disconnected", portal: "vpn.example" })
+      write(status)
+      portalStep++
+      break
+    case 3:
+      if (s.pending || s.state !== "disconnected") return false
+      check(!widget.showPortal && portalField.text === "", "hiding setup clears its portal draft")
+      // Retained text must be ignored even if a hidden field acquires a draft.
+      portalField.text = "old-portal.example"
+      widget.focusSection = "action"
+      widget.activateCursor()
+      portalStep++
+      break
+    case 4:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === undefined, "keyboard action ignores hidden portal text")
+      acknowledge(true)
+      lastCommand = {}
+      portalStep++
+      break
+    case 5:
+      if (s.pending) return false
+      actionButton.clicked()
+      portalStep++
+      break
+    case 6:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === undefined, "action button ignores hidden portal text")
+      acknowledge(true)
+      lastCommand = {}
+      portalStep++
+      break
+    case 7:
+      if (s.pending) return false
+      barButton.triggerPress(Qt.RightButton)
+      portalStep++
+      break
+    case 8:
+      if (lastCommand.type !== "connect") return false
+      check(lastCommand.portal === undefined, "bar right click ignores hidden portal text")
+      acknowledge(true)
+      lastCommand = {}
+      portalStep++
+      break
+    case 9:
+      if (s.pending) return false
+      portalField.text = ""
+      return true
+    }
+    return false
+  }
 
   // Exercise connects before any manual choice, then selection invalidation.
   // The original harness picked a gateway before its first connect and could
@@ -84,7 +203,7 @@ ShellRoot {
       break
     case 6:
       if (s.pending) return false
-      s.selectedGateway = "eu.example"
+      selectGateway("eu.example")
       s.connectVpn("portal-b.example")
       gatewayStep++
       break
@@ -92,9 +211,10 @@ ShellRoot {
       if (lastCommand.type !== "connect") return false
       check(lastCommand.portal === "portal-b.example" && lastCommand.gateway === undefined,
         "explicit portal change drops old portal's gateway")
+      checkAutomatic("picker follows selection cleared by explicit portal override")
       acknowledge(true)
       lastCommand = {}
-      s.selectedGateway = "eu.example"
+      selectGateway("eu.example")
       status = Object.assign({}, status, { portal: "portal-b.example" })
       write(status)
       gatewayStep++
@@ -102,7 +222,8 @@ ShellRoot {
     case 8:
       if (s.pending || s.snapshot.portal !== "portal-b.example") return false
       check(s.selectedGateway === "", "portal status change clears selection even when address is still listed")
-      s.selectedGateway = "eu.example"
+      checkAutomatic("picker returns to Automatic after portal status change")
+      selectGateway("eu.example")
       status = Object.assign({}, status, { gateways: [{ name: "Australia", address: "au.example" }] })
       write(status)
       gatewayStep++
@@ -110,6 +231,7 @@ ShellRoot {
     case 9:
       if (s.gatewayOptions.length !== 1) return false
       check(s.selectedGateway === "", "gateway disappearing from status clears selection")
+      checkAutomatic("picker returns to Automatic when selected gateway disappears")
       status = Object.assign({}, status, { gateways: [
         { name: "Australia", address: "au.example" }, { name: "Europe", address: "eu.example" }] })
       write(status)
@@ -117,8 +239,8 @@ ShellRoot {
       break
     case 10:
       if (s.gatewayOptions.length !== 2) return false
-      s.selectedGateway = "eu.example"
-      s.selectedGateway = ""
+      selectGateway("eu.example")
+      selectGateway("")
       s.act()
       gatewayStep++
       break
@@ -199,6 +321,10 @@ ShellRoot {
     onTriggered: {
       var s = root.service
       if (!s) return
+      if (!root.portalChecksComplete) {
+        root.portalChecksComplete = root.checkPortalActions(s)
+        return
+      }
       if (!root.gatewayChecksComplete) {
         root.gatewayChecksComplete = root.checkGatewaySelection(s)
         return
@@ -208,7 +334,7 @@ ShellRoot {
         if (!s.ready) return
         root.check(s.state === "disconnected", "initial socket greeting/status")
         root.check(s.gatewayOptions.length === 2, "gateway list")
-        s.selectedGateway = "eu.example"
+        root.selectGateway("eu.example")
         s.act(" vpn.example ")
         root.step++
         break
@@ -290,6 +416,7 @@ ShellRoot {
         break
       case 12:
         if (s.state !== "disconnected") return
+        root.selectGateway("eu.example")
         s.sendCommand("disconnect")
         server.active = false
         root.step++
@@ -299,6 +426,8 @@ ShellRoot {
         root.check(s.state === "stack-down" && !s.connected, "socket loss clears stale connected state")
         root.check(!s.pending && s.actionError !== "", "socket loss fails pending command")
         root.check(s.selectedGateway === "", "daemon loss clears manual gateway selection")
+        root.checkAutomatic("picker returns to Automatic on socket loss")
+        root.check(root.portalField.text === "", "stopping service does not revive the setup portal")
         server.active = true
         root.step++
         break
@@ -306,6 +435,7 @@ ShellRoot {
         if (!s.ready) return
         root.check(true, "socket reconnects after daemon restart")
         root.check(s.selectedGateway === "", "daemon restart does not manufacture a gateway pin")
+        root.checkAutomatic("picker remains Automatic after daemon restart")
         root.protocol = 2
         root.mismatchConnections = root.connections
         root.mismatchSince = Date.now()

@@ -190,6 +190,10 @@ the gateway's display name. Command failures remain visible until retried or the
 connection changes state. OTP values are sent only over the daemon socket
 and are cleared from the input on submission or panel close.
 
+The setup portal is saved before the connection attempt, even if the attempt
+fails. Its draft is cleared when the field hides; subsequent connects use the
+configured portal unless you enter an address in the visible setup field.
+
 A shared service maintains one socket connection across all bar monitors,
 with automatic reconnection when the daemon restarts. Status is pushed by the
 daemon; there is no status subprocess polling. `refreshIntervalSec` from older

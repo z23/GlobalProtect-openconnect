@@ -60,8 +60,12 @@ Panel {
     panelFlick.contentY = Math.max(0, Math.min(panelFlick.contentY, panelFlick.contentHeight - panelFlick.height))
   }
   onFocusSectionChanged: Qt.callLater(scrollCursorIntoView)
+  onShowPortalChanged: if (!showPortal && portal) portal.text = ""
+  function activateAction() {
+    if (canAct) service.act(showPortal ? portal.text : "")
+  }
   function activateCursor() {
-    if (focusSection === "action" && canAct) service.act(portal.text)
+    if (focusSection === "action") activateAction()
     else if (focusSection === "gateway") gateway.open()
     else if (focusSection === "portal") portal.forceActiveFocus()
     else if (focusSection === "otp") otp.forceActiveFocus()
@@ -110,6 +114,7 @@ Panel {
 
   WidgetButton {
     id: button
+    objectName: "vpnBarButton"
     anchors.fill: parent
     bar: root.bar
     labelVisible: false
@@ -122,7 +127,7 @@ Panel {
       + "\nLeft click: details · Right click: connect/disconnect"
     onPressed: function(b) {
       if (b === Qt.LeftButton) root.toggle()
-      else if (b === Qt.RightButton && root.canAct) root.service.act(portal.text)
+      else if (b === Qt.RightButton) root.activateAction()
       else if (b === Qt.MiddleButton && root.service) root.service.refresh()
     }
 
@@ -210,13 +215,14 @@ Panel {
             }
             trailingControl: Component {
               Button {
+                objectName: "vpnActionButton"
                 text: root.service ? root.service.actionText : "Unavailable"
                 enabled: root.canAct
                 bordered: true
                 foreground: root.foreground
                 hasCursor: root.cursorActive && root.focusSection === "action"
                 onHovered: function(hot) { if (hot) root.chooseSection("action") }
-                onClicked: root.service.act(portal.text)
+                onClicked: root.activateAction()
               }
             }
           }
@@ -239,19 +245,20 @@ Panel {
             PanelSectionHeader { text: root.state === "needs-setup" ? "PORTAL SETUP" : "PORTAL"; foreground: root.foreground }
             TextField {
               id: portal
+              objectName: "portalField"
               width: parent.width
               placeholderText: root.state === "needs-setup" ? "vpn.example.com" : "Use configured portal, or enter an address"
               foreground: root.foreground
               enabled: !root.service || !root.service.pending
               hasCursor: root.cursorActive && root.focusSection === "portal"
               onActiveFocusChanged: if (activeFocus) root.chooseSection("portal")
-              onAccepted: if (root.canAct) root.service.act(text)
+              onAccepted: root.activateAction()
               Keys.onPressed: function(event) { root.inputKey(event) }
             }
             Text {
               textFormat: Text.PlainText
               width: parent.width
-              text: "The portal is saved after a successful connection."
+              text: "The portal is saved when you start a connection attempt."
               wrapMode: Text.Wrap
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
@@ -261,6 +268,7 @@ Panel {
 
           Dropdown {
             id: gateway
+            objectName: "gatewayPicker"
             width: parent.width
             visible: root.service && (root.service.gatewayOptions.length > 1 || root.service.selectedGateway !== "")
             label: root.service && root.service.connected ? "GATEWAY FOR NEXT CONNECTION" : "GATEWAY"
@@ -270,7 +278,12 @@ Panel {
             enabled: root.service && !root.service.busy && !root.service.pending
             hasCursor: root.cursorActive && root.focusSection === "gateway"
             onHovered: function(hot) { if (hot) root.chooseSection("gateway") }
-            onChanged: function(value) { root.service.selectedGateway = value; keyCatcher.forceActiveFocus() }
+            onChanged: function(value) {
+              root.service.selectedGateway = value
+              // Dropdown assigns its value on selection, removing the binding.
+              gateway.value = Qt.binding(function() { return root.service ? root.service.selectedGateway : "" })
+              keyCatcher.forceActiveFocus()
+            }
           }
 
           Column {

@@ -62,7 +62,7 @@ enum Command {
     /// Gateway name or address (overrides the configured pin)
     #[arg(long)]
     gateway: Option<String>,
-    /// Portal address (persisted to the config on success)
+    /// Portal address (persisted to the config before the connection attempt)
     #[arg(long)]
     portal: Option<String>,
   },
