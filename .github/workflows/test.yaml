@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   gpwidget:
-    runs-on: ubuntu-24.04
+    # gtk4-layer-shell is not packaged on Ubuntu 24.04.
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
