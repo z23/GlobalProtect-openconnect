@@ -29,8 +29,14 @@ BuildRequires:  perl
 
 BuildRequires:  pkgconfig(webkit2gtk-4.1)
 BuildRequires:  (pkgconfig(appindicator3-0.1) or pkgconfig(ayatana-appindicator3-0.1))
+BuildRequires:  gtk4-devel
 
 BuildRequires:  (librsvg2-devel or librsvg-devel)
+
+# gtk4-layer-shell is not packaged for EL10. A source build into /usr/local
+# (https://github.com/wmww/gtk4-layer-shell) satisfies the build. The automatic
+# library dependency is omitted so the package still installs there.
+%global __requires_exclude ^libgtk4-layer-shell\\.so.*$
 
 %if 0%{?suse_version}
 Requires:       (libappindicator3-1 or libayatana-appindicator3-1)
@@ -63,10 +69,14 @@ fi
 %build
 # The injected RUSTFLAGS could fail the build
 unset RUSTFLAGS
-make build
+# RPM overrides PKG_CONFIG_PATH with the system dirs only. Re-add /usr/local so a
+# source-built gtk4-layer-shell is found on EL10.
+export PKG_CONFIG_PATH=%{_libdir}/pkgconfig:/usr/share/pkgconfig:/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig
+# gpwidget supplies the gpgui path. Skip the proprietary GUI download.
+make build BUILD_GUI_HELPER=0
 
 %install
-%make_install
+%make_install BUILD_GUI_HELPER=0
 
 %files
 %defattr(-,root,root)
@@ -83,6 +93,7 @@ make build
 %{_datadir}/icons/hicolor/256x256@2/apps/gpgui.png
 %{_datadir}/icons/hicolor/scalable/apps/gpgui.svg
 %{_datadir}/polkit-1/actions/com.yuezk.gpgui.policy
+%{_datadir}/gpwidget/
 
 %dir /usr/lib/NetworkManager
 %dir /usr/lib/NetworkManager/dispatcher.d

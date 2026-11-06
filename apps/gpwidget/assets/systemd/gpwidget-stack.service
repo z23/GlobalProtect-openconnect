@@ -1,0 +1,30 @@
+# Starts the GlobalProtect VPN service stack (gpservice + gpwidget daemon)
+# at login so bar widgets have live status immediately. The VPN itself is
+# NOT dialed automatically unless auto-connect is set in
+# ~/.config/gpwidget/config.toml.
+#
+# Alternative to a compositor autostart entry, e.g. in niri:
+#   spawn-at-startup "gpclient" "launch-gui"
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp /usr/share/gpwidget/examples/systemd/gpwidget-stack.service ~/.config/systemd/user/
+#   systemctl --user enable --now gpwidget-stack.service
+#
+# Requires the compositor session's environment (WAYLAND_DISPLAY etc.) to be
+# imported into the systemd user manager; niri, sway and GNOME do this by
+# default in current versions.
+
+[Unit]
+Description=GlobalProtect VPN widget stack (gpservice + gpwidget daemon)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gpclient launch-gui
+# The stack exits when quit from the widget; that is deliberate, not a failure.
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target

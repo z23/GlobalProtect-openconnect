@@ -22,6 +22,8 @@ Build-Depends: debhelper (>= 9),
   libayatana-appindicator3-1,
   gnome-keyring,
   libwebkit2gtk-4.1-dev,
+  libgtk-4-dev,
+  libgtk4-layer-shell-dev,
   cargo-@RUST_VERSION@,
   rustc-@RUST_VERSION@
 Homepage: https://github.com/yuezk/GlobalProtect-openconnect

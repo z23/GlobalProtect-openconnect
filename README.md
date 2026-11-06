@@ -4,6 +4,8 @@ A GlobalProtect VPN client built on OpenConnect. It provides command-line tools 
 
 > **Disclaimer**: GP Connect is an independent third-party client for GlobalProtect VPN networks. It is not affiliated with or endorsed by Palo Alto Networks, Inc.
 
+> **Fork notice.** This tree is [z23/GlobalProtect-openconnect](https://github.com/z23/GlobalProtect-openconnect). It tracks upstream and adds `gpwidget`, an open-source Wayland bar widget for waybar and Omarchy Shell, with a native Omarchy panel and a GTK4 layer-shell popup. See [docs/widget.md](docs/widget.md).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/gp-connect-showcase-dark.png">
@@ -42,6 +44,7 @@ A GlobalProtect VPN client built on OpenConnect. It provides command-line tools 
 
 - **Multi-Platform** – macOS (Apple silicon), Linux, FreeBSD, and OpenBSD
 - **Dual Interfaces** – Fast terminal CLI (`gpclient`) and desktop GUI (**GP Connect**)
+- **gpwidget (this fork)** – Waybar and Omarchy Shell status widget with a native Omarchy panel
 - **Native Shell on Linux** – Ultra-low-memory native desktop GUI alongside the webview interface
 - **Flexible Routing** – Full System VPN tunnel or local SOCKS5 proxy mode
 - **Modern Authentication** – SAML / SSO, MFA, FIDO2 (YubiKey), client certificates, and external browser login
@@ -131,6 +134,8 @@ sudo pacman -S globalprotect-openconnect
 # AUR (git main)
 yay -S globalprotect-openconnect-git
 ```
+
+Upstream Extra and AUR packages do not include `gpwidget`. Build this fork with `make build` and `sudo make install`. Setup for the Omarchy panel and waybar is in [docs/widget.md](docs/widget.md).
 
 ### Fedora / RHEL
 

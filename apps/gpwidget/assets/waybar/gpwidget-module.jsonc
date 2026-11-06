@@ -1,0 +1,25 @@
+// GlobalProtect VPN module for waybar.
+//
+// Merge into your waybar config (~/.config/waybar/config.jsonc):
+//   1. Add "custom/gpvpn" to modules-left/center/right.
+//   2. Copy this module definition.
+//   3. Append style.css (next to this file) to your waybar style.css.
+//
+// The glyphs in `text` come from the daemon and use Nerd Font Material
+// Design icons (shield-*). Set waybar.show-gateway = false in
+// ~/.config/gpwidget/config.toml for an icon-only pill.
+{
+  "custom/gpvpn": {
+    // Continuous mode: gpwidget streams one JSON line per status change.
+    "exec": "gpwidget status --waybar",
+    "return-type": "json",
+    "format": "{}",
+    "tooltip": true,
+    // Gateway names are server-controlled: keep pango-escaping on.
+    "escape": true,
+    // Respawn the stream if it ever dies.
+    "restart-interval": 5,
+    "on-click": "gpwidget popup",
+    "on-click-right": "gpwidget toggle"
+  }
+}

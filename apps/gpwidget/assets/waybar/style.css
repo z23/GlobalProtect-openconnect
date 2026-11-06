@@ -1,0 +1,39 @@
+/* GlobalProtect VPN module — append to your waybar style.css.
+ * Colors follow the same palette as the gpwidget popup; adjust to taste. */
+
+#custom-gpvpn {
+  padding: 0 10px;
+}
+
+#custom-gpvpn.connected {
+  color: #a6e3a1;
+}
+
+#custom-gpvpn.connected.expiring {
+  color: #fab387;
+}
+
+#custom-gpvpn.connecting,
+#custom-gpvpn.disconnecting {
+  color: #f9e2af;
+  animation: gpblink 1s steps(2) infinite alternate;
+}
+
+#custom-gpvpn.disconnected,
+#custom-gpvpn.stack-down {
+  color: #6c7086;
+}
+
+#custom-gpvpn.needs-setup {
+  color: #89b4fa;
+}
+
+#custom-gpvpn.error {
+  color: #f38ba8;
+}
+
+@keyframes gpblink {
+  to {
+    opacity: 0.4;
+  }
+}

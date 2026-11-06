@@ -175,6 +175,8 @@
             glib-networking
             libsecret
             libayatana-appindicator
+            gtk4
+            gtk4-layer-shell
           ];
 
         installNixosPolkitRule = ''

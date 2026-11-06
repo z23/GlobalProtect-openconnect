@@ -10,10 +10,11 @@ url="https://github.com/yuezk/GlobalProtect-openconnect"
 license=('GPL3')
 makedepends=('make' 'pkg-config' 'cargo' 'file' 'autoconf' 'automake' 'gettext' 'libtool' 'patch')
 depends=('webkit2gtk-4.1' 'libappindicator-gtk3' 'librsvg' 'libsecret' 'appmenu-gtk-module'
+         'gtk4' 'gtk4-layer-shell'
          'gnutls' 'libxml2' 'zlib' 'lz4' 'libp11-kit' 'nettle' 'libhogweed.so' 'gmp' 'xdg-utils')
 optdepends=('wmctrl: for window management')
 
-provides=('globalprotect-openconnect' 'gpclient' 'gpservice' 'gpauth' 'gpgui')
+provides=('globalprotect-openconnect' 'gpclient' 'gpservice' 'gpauth' 'gpgui' 'gpwidget')
 install=gp.install
 
 source=("${_pkgname}-${pkgver}.tar.gz")
@@ -27,11 +28,12 @@ build() {
   # Must unset the CFLAGS, otherwise the build fails
   unset CFLAGS
 
-  make build
+  # gpwidget supplies the gpgui path. Skip the proprietary GUI download.
+  make build BUILD_GUI_HELPER=0
 }
 
 package() {
   cd "$pkgname-$pkgver"
 
-  make install DESTDIR="$pkgdir"
+  make install DESTDIR="$pkgdir" BUILD_GUI_HELPER=0
 }

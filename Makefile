@@ -33,6 +33,14 @@ PUBLISH ?= 0
 # Indicates whether to build the GUI components
 BUILD_GUI_HELPER ?= 1
 
+# Open-source bar widget. It needs GTK4 and gtk4-layer-shell, so non-Linux
+# builds leave it off.
+ifeq ($(shell uname -s),Linux)
+BUILD_WIDGET ?= 1
+else
+BUILD_WIDGET ?= 0
+endif
+
 # Indicates whether to build embedded webview auth support into gpauth
 BUILD_WEBVIEW_AUTH ?= 1
 ifeq ($(shell uname -s),Linux)
@@ -142,6 +150,18 @@ build-rs:
 		$(CARGO) build $(CARGO_BUILD_ARGS) -p gpgui-helper; \
 	fi
 
+	if [ $(BUILD_WIDGET) -eq 1 ]; then \
+		$(CARGO) build $(CARGO_BUILD_ARGS) -p gpwidget; \
+	fi
+
+# Logic tests for the Omarchy bar widget. The widget is a shipped QML asset,
+# and the tests need node rather than the Rust toolchain.
+test-omarchy-widget:
+	node apps/gpwidget/assets/omarchy/Model.test.js
+
+test-omarchy-widget-runtime:
+	apps/gpwidget/tests/omarchy/run.sh
+
 clean:
 	$(CARGO) clean
 	rm -rf .build
@@ -210,6 +230,21 @@ install-linux: install-unix
 		install -m "$$mode" "packaging/files/usr/$$file" "$$destination"; \
 	done
 	sh scripts/relocate-install-paths.sh "$(PREFIX)" /usr "$(DESTDIR)$(PREFIX)"
+	# gpwidget is the desktop GUI for this fork. The wrapper occupies the gpgui
+	# path so `gpclient launch-gui` starts the daemon. Omarchy and waybar assets
+	# live under share/gpwidget.
+	set -e; if [ "$(BUILD_WIDGET)" = "1" ]; then \
+		install -m 755 "$(CARGO_RELEASE_DIR)/gpwidget" "$(DESTDIR)$(PREFIX)/bin/"; \
+		install -m 755 apps/gpwidget/assets/gpgui "$(DESTDIR)$(PREFIX)/bin/gpgui"; \
+		share="$(DESTDIR)$(PREFIX)/share/gpwidget"; \
+		install -Dm644 apps/gpwidget/assets/waybar/gpwidget-module.jsonc "$$share/examples/waybar/gpwidget-module.jsonc"; \
+		install -Dm644 apps/gpwidget/assets/waybar/style.css "$$share/examples/waybar/style.css"; \
+		install -Dm644 apps/gpwidget/assets/systemd/gpwidget-stack.service "$$share/examples/systemd/gpwidget-stack.service"; \
+		install -Dm644 apps/gpwidget/assets/omarchy/manifest.json "$$share/examples/omarchy/manifest.json"; \
+		for file in BarWidget.qml Service.qml Model.js; do \
+			install -Dm644 "apps/gpwidget/assets/omarchy/$$file" "$$share/examples/omarchy/$$file"; \
+		done; \
+	fi
 
 install-bsd: install-unix
 	@echo "Installing BSD integration under $(PREFIX)..."
@@ -300,7 +335,8 @@ endif
 
 .PHONY: install install-gpclient install-macos install-unix install-linux install-bsd \
 	install-gpclient-macos install-gpclient-unix \
-	uninstall uninstall-macos uninstall-unix uninstall-linux uninstall-bsd
+	uninstall uninstall-macos uninstall-unix uninstall-linux uninstall-bsd \
+	test-omarchy-widget test-omarchy-widget-runtime
 
 uninstall-macos:
 	@echo "Uninstalling $(PKG_NAME) for macOS under $(PREFIX)..."
@@ -329,6 +365,8 @@ uninstall-unix:
 uninstall-linux: uninstall-unix
 	rm -f "$(DESTDIR)$(PREFIX)/lib/NetworkManager/dispatcher.d/pre-down.d/gpclient.down" \
 		"$(DESTDIR)$(PREFIX)/lib/NetworkManager/dispatcher.d/gpclient-nm-hook"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/gpwidget"
+	rm -rf "$(DESTDIR)$(PREFIX)/share/gpwidget"
 	rm -f "$(DESTDIR)/var/lib/gpclient/gpgui" \
 		"$(DESTDIR)/var/lib/gpclient/gpgui-nsh" \
 		"$(DESTDIR)/var/lib/gpclient/scripts/vpnc-script" \

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "gpwidget.vpn",
+  "name": "GlobalProtect VPN",
+  "version": "2.0.0",
+  "author": "GlobalProtect-openconnect contributors",
+  "license": "GPL-3.0",
+  "description": "GlobalProtect status and controls for the Omarchy bar.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "GlobalProtect VPN",
+    "description": "Native VPN panel with gateway selection, traffic, session details, and OTP entry.",
+    "category": "Network",
+    "aliases": [
+      "vpn",
+      "globalprotect",
+      "gpwidget"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showGateway": false
+    },
+    "schema": [
+      {
+        "key": "showGateway",
+        "type": "boolean",
+        "label": "Show connected gateway",
+        "defaultValue": false
+      }
+    ]
+  }
+}
