@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   gpwidget:
-    # gtk4-layer-shell is not packaged on Ubuntu 24.04.
+    # gtk4-layer-shell is not packaged on Ubuntu 24.04. The pinned
+    # actionlint learns this hosted label from .github/actionlint.yaml.
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout

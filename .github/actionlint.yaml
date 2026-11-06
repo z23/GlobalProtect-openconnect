@@ -1,0 +1,6 @@
+# actionlint 1.7.12, pinned by release-checks, does not know the
+# ubuntu-26.04 GitHub-hosted label yet. gpwidget needs that image because
+# Ubuntu 24.04 does not package gtk4-layer-shell.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
