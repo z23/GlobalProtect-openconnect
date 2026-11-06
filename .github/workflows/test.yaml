@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  gpwidget:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.91
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgtk-4-dev \
+            libgtk4-layer-shell-dev \
+            libgnutls28-dev
+
+      - name: Test the Omarchy widget model
+        run: node apps/gpwidget/assets/omarchy/Model.test.js
+
+      - name: Test gpwidget
+        run: cargo test -p gpwidget --locked
